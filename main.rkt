@@ -35,7 +35,7 @@
   (define-syntax define-syntax-generic
     (syntax-parser
       [(_ name:id
-          #:fallback fallback-proc:expr)
+          fallback-proc:expr)
        #'(begin
            (define-values (prop pred ref) (make-struct-type-property 'name))
            (define func (make-dispatch 'name pred ref fallback-proc))

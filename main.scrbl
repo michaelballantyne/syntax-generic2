@@ -5,7 +5,7 @@
 @defmodule[syntax-generic]
 
 @defform[(define-generic-syntax generic-name
-           #:fallback fallback-procedure)]{
+           fallback fallback-procedure)]{
   Defines a syntax generic procedure.
 }
 

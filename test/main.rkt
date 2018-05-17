@@ -7,7 +7,7 @@
 
 (begin-for-syntax
   (define-syntax-generic foo
-    #:fallback (lambda (stx) 'fallback)))
+    (lambda (stx) 'fallback)))
 
 (define-syntax/generics bar
   (lambda (stx) (raise-syntax-error "bad" stx))
