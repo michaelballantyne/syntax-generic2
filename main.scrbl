@@ -2,7 +2,7 @@
 
 @title{Syntax Generics}
 
-@defmodule[syntax-generic]
+@defmodule[syntax-generic2]
 
 @defform[(define-generic-syntax generic-name
            fallback fallback-procedure)]{
