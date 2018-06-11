@@ -1,68 +1,92 @@
 #lang racket/base
 
-(require (for-syntax racket/base syntax/parse)
-         (for-meta 2 racket/base syntax/parse syntax/transformer))
+(require
+  syntax/parse
+  syntax/apply-transformer
+  (for-syntax
+   racket/base
+   syntax/parse
+   syntax/transformer
+   racket/syntax)
+  (for-template racket/base))
 
-(provide (for-syntax define-syntax-generic
-                     syntax-generic-prop)
-         define-syntax/generics)
+(provide define-syntax-generic
+         syntax-generic-prop
+         generics
+         call-with-expand-context)
+
+(define (get-procedure prop-pred prop-ref stx-arg)
+  (define v
+    (syntax-parse stx-arg
+      [v:id
+       #'v]
+      [(v:id . rest)
+       #'v]
+      [_ #f]))
+  #;(displayln (syntax-debug-info v))
+  (and v
+       (let ([v (syntax-local-value v (lambda () #f))])
+         #;(displayln v)
+         (and (prop-pred v)
+              ((prop-ref v) v)))))
+
+(define ((make-predicate prop-pred prop-ref) stx-arg)
+  (if (get-procedure prop-pred prop-ref stx-arg) #t #f))
+
+(define ((make-dispatch gen-name prop-pred prop-ref fallback) stx-arg . args)
+  (define f
+    (or (get-procedure prop-pred prop-ref stx-arg)
+        fallback))
+  (apply f stx-arg args))
 
 (begin-for-syntax
-  (define ((make-dispatch gen-name prop-pred prop-ref fallback) stx-arg . args)
-    (define v
-      (syntax-parse stx-arg
-        [v:id
-         #'v]
-        [(v:id . rest)
-         #'v]
-        [_ #f]))
-    (define f
-      (or (and v
-               (let ([v (syntax-local-value v (lambda () #f))])
-                 (and (prop-pred v)
-                      ((prop-ref v) v))))
-          fallback))
-    (apply f stx-arg args)))
-
-(begin-for-syntax
-  (begin-for-syntax
-    (struct generic (prop func)
-      #:property prop:procedure
-      (lambda (s stx)
-        ((set!-transformer-procedure
-          (make-variable-like-transformer (generic-func s))) stx))))
+  (struct generic-info (prop func)
+    #:property prop:procedure
+    (lambda (s stx)
+      ((set!-transformer-procedure
+        (make-variable-like-transformer (generic-info-func s))) stx))))
   
-  (define-syntax define-syntax-generic
-    (syntax-parser
-      [(_ name:id
-          fallback-proc:expr)
-       #'(begin
-           (define-values (prop pred ref) (make-struct-type-property 'name))
-           (define func (make-dispatch 'name pred ref fallback-proc))
-           (define-syntax name (generic #'prop #'func)))]))
-
-  (define-syntax syntax-generic-prop
-    (syntax-parser
-      [(_ gen-name)
-       (define (error)
-         (raise-syntax-error
-          #f
-          "expected reference to syntax generic"
-          this-syntax))
-       (let ([v (syntax-local-value
-                 #'gen-name
-                 error)])
-         (or (and (generic? v) (generic-prop v))
-             (error)))])))
-
-(define-syntax define-syntax/generics
+(define-syntax define-syntax-generic
   (syntax-parser
     [(_ name:id
-        expander:expr
-        [gen:id func:expr] ...)
+        fallback-proc:expr)
+     (define/syntax-parse gen-pred (format-id #'name "~a?" #'name))
      #'(begin
-         (begin-for-syntax
-           (struct s ()
-             #:property prop:procedure (lambda (s stx) (expander stx))
-             (~@ #:property (syntax-generic-prop gen) (lambda (st) func)) ...))
-         (define-syntax name (s)))]))
+         (define-values (prop pred ref) (make-struct-type-property 'name))
+         (define func (make-dispatch 'name pred ref fallback-proc))
+         (define gen-pred (make-predicate pred ref))
+         (define-syntax name (generic-info #'prop #'func)))]))
+
+(define-syntax syntax-generic-prop
+  (syntax-parser
+    [(_ gen-name)
+     (define (error)
+       (raise-syntax-error
+        #f
+        "expected reference to syntax generic"
+        this-syntax))
+     (let ([v (syntax-local-value
+               #'gen-name
+               error)])
+       (or (and (generic-info? v) (generic-info-prop v))
+           (error)))]))
+
+(define (not-an-expression stx)
+  (raise-syntax-error #f "not an expression" stx))
+
+(define-syntax generics
+  (syntax-parser
+    [(_ (~alt (~optional [(~literal expand) expander] #:defaults ([expander #'not-an-expression]))
+              [gen:id func:expr]) ...)
+     #'(let ()
+         (struct s ()
+           #:property prop:procedure (lambda (s stx) (expander stx))
+           (~@ #:property (syntax-generic-prop gen) (lambda (st) func)) ...)
+         (s))]))
+
+(define (call-with-expand-context f ctx . args)
+  (define (g stx)
+    #`#,(call-with-values (lambda () (apply f (syntax->list stx)))
+                      list))
+  (define res (local-apply-transformer g #`#,args 'expression ctx))
+  (apply values (syntax->list res)))
