@@ -13,8 +13,7 @@
 (provide define-syntax-generic
          syntax-generic-prop
          generics
-         apply-as-transformer
-         with-expand-context)
+         apply-as-transformer)
 
 (define (get-procedure prop-pred prop-ref stx-arg)
   (define v
