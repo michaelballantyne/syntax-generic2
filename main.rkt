@@ -84,9 +84,22 @@
            (~@ #:property (syntax-generic-prop gen) (lambda (st) func)) ...)
          (s))]))
 
+(struct wrapper (contents))
+(define (wrap arg)
+  (if (syntax? arg)
+      arg
+      (wrapper arg)))
+
+(define (unwrap arg)
+  (if (and (syntax? arg) (wrapper? (syntax-e arg)))
+      (wrapper-contents (syntax-e arg))
+      arg))
+
 (define (call-with-expand-context f ctx . args)
   (define (g stx)
-    #`#,(call-with-values (lambda () (apply f (syntax->list stx)))
-                      list))
-  (define res (local-apply-transformer g #`#,args 'expression ctx))
+    #`#,(call-with-values (lambda () (apply f (map unwrap (syntax->list stx))))
+                          list))
+  (define res (local-apply-transformer
+               g (datum->syntax #f (map wrap args))
+               'expression (if ctx (list ctx) '())))
   (apply values (syntax->list res)))
