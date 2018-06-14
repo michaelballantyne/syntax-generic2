@@ -13,7 +13,8 @@
 (provide define-syntax-generic
          syntax-generic-prop
          generics
-         call-with-expand-context)
+         apply-as-transformer
+         with-expand-context)
 
 (define (get-procedure prop-pred prop-ref stx-arg)
   (define v
@@ -95,7 +96,7 @@
       (wrapper-contents (syntax-e arg))
       arg))
 
-(define (call-with-expand-context f ctx . args)
+(define (apply-as-transformer f ctx . args)
   (define (g stx)
     #`#,(call-with-values (lambda () (apply f (map unwrap (syntax->list stx))))
                           list))
