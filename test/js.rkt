@@ -5,13 +5,14 @@
   json
   
   (for-syntax
+   racket/pretty
    syntax-generic2
    syntax/stx
    syntax/id-table
    (rename-in syntax/parse [define/syntax-parse def/stx])
    ))
 
-(define-syntax-rule
+(define-syntax-rule 
   (define-syntax/generics (name pat ...)
     [(method args ...)
      body body* ...] ...)
@@ -63,9 +64,9 @@
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx)
-         (js-expand-expression (apply-as-transformer js-transformer ctx stx) ctx)]
+         (js-expand-expression (apply-as-transformer js-transformer 'expression ctx stx) ctx)]
       [_ #:when (js-core-expression? stx)
-         (apply-as-transformer js-core-expression ctx stx)]
+         (apply-as-transformer js-core-expression 'expression ctx stx)]
       [_ #:when (js-core-statement-pass1? stx)
          (raise-syntax-error #f "js statement not valid in js expression position" stx)]
       [x:id #:when (js-variable? stx)
@@ -74,7 +75,8 @@
       [(e ...)
        (with-syntax ([app (datum->syntax stx '#%js-app)])
          (js-expand-expression #'(app e ...) ctx))]
-      [else (raise-syntax-error #f "not a js expression" stx)]))
+      [else
+       (raise-syntax-error #f "not a js expression" stx)]))
 
   ; local-expand with 'expression ensures use-site scopes added to this point aren't deleted
   ;  upon syntax-local-identifier-as-binder within. Might be a problem here... local-apply-transformer
@@ -82,16 +84,16 @@
   (define (js-expand-statement-pass1 stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx)
-         (js-expand-statement-pass1 (apply-as-transformer js-transformer ctx stx) ctx)]
+         (js-expand-statement-pass1 (apply-as-transformer js-transformer (list ctx) ctx stx) ctx)]
       [_ #:when (js-core-statement-pass1? stx)
-         (apply-as-transformer js-core-statement-pass1 ctx stx ctx)]
+         (apply-as-transformer js-core-statement-pass1 (list ctx) ctx stx ctx)]
       ; Assume it's an expression; we'll expand those in pass 2.
       [_ stx]))
 
   (define (js-expand-statement-pass2 stx ctx)
     (syntax-parse stx
       [_ #:when (js-core-statement-pass2? stx)
-         (apply-as-transformer js-core-statement-pass2 ctx stx)]
+         (apply-as-transformer js-core-statement-pass2 (list ctx) ctx stx)]
       [_ (js-expand-expression stx ctx)]))
 
   (define (expand-block body ctx)
@@ -170,8 +172,8 @@
 
 (define-syntax/generics (let x e)
   [(js-core-statement-pass1 ctx)
-   (syntax-local-bind-syntaxes (list #'x) #`#,js-var ctx)
-   (def/stx x^ (internal-definition-context-introduce ctx #'x))
+   (def/stx x^ (internal-definition-context-introduce ctx (syntax-local-identifier-as-binding #'x)))
+   (syntax-local-bind-syntaxes (list #'x^) #`#,js-var ctx)
    #'(let x^ e)]
   [(js-core-statement-pass2)
    (def/stx e^ (js-expand-expression #'e #f))
@@ -290,17 +292,25 @@
       [(_ v)
        #'(set! v (+ 1 v))])]))
 
+(define-syntax defn
+  (generics
+   [js-transformer
+    (syntax-parser
+      [(_ (name args ...) body ...)
+       #'(let name (function (args ...) body ...))])]))
+
+
 (module+ test
-  (js ((function ()
-                 (let factorial (function (n)
-                                          (if (<= n 1)
-                                              ((return 1))
-                                              ((return (* n (factorial (- n 1))))))))
-                 (return (factorial 5)))))
+  #;(js ((function ()
+                   (let factorial (function (n)
+                                            (if (<= n 1)
+                                                ((return 1))
+                                                ((return (* n (factorial (- n 1))))))))
+                   (return (factorial 5)))))
   
   (js ((function ()
-                 (let factorial (function (n)
-                                          (return (? (<= n 1) 1 (* n (factorial (- n 1)))))))
+                 (defn (factorial n)
+                   (return (? (<= n 1) 1 (* n (factorial (- n 1))))))
                  (return (factorial 5)))))
   
 
@@ -322,5 +332,6 @@
                                        [(== n 2) 1]
                                        [else (+ (fib (- n 1)) (fib (- n 2)))]))))
                  (return (fib 6)))))
+  
 
   )

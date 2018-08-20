@@ -95,11 +95,11 @@
       (wrapper-contents (syntax-e arg))
       arg))
 
-(define (apply-as-transformer f ctx . args)
+(define (apply-as-transformer f ctx-type ctx . args)
   (define (g stx)
     #`#,(call-with-values (lambda () (apply f (map unwrap (syntax->list stx))))
                           list))
   (define res (local-apply-transformer
                g (datum->syntax #f (map wrap args))
-               'expression (if ctx (list ctx) '())))
+               ctx-type (if ctx (list ctx) '())))
   (apply values (syntax->list res)))
