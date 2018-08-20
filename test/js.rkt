@@ -1,16 +1,21 @@
-#lang racket
+#lang racket/base
 
 (require
 
   json
+  racket/list
+  racket/system
+  
   
   (for-syntax
+   racket/base
    racket/pretty
    syntax-generic2
    syntax/stx
    syntax/id-table
    (rename-in syntax/parse [define/syntax-parse def/stx])
    ))
+
 
 (define-syntax-rule 
   (define-syntax/generics (name pat ...)
@@ -125,6 +130,7 @@
                     body)))
   )
 
+
 (define (runjs estree)
   (define f (fifth (process*/ports
                     (current-output-port)
@@ -188,6 +194,13 @@
            'id (extract-id #'x idmap)
            'init (extract-js-expression #'e idmap))))])
 
+(define-syntax/generics (let-syntax m e)
+  [(js-core-statement-pass1 ctx)
+   (def/stx m^ (internal-definition-context-introduce ctx (syntax-local-identifier-as-binding #'m)))
+   (syntax-local-bind-syntaxes (list #'m^) #'(generics
+                                              [js-transformer e]) ctx)
+   #'5])
+   
 (define-syntax/generics (return e)
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
@@ -300,13 +313,14 @@
        #'(let name (function (args ...) body ...))])]))
 
 
+
 (module+ test
-  #;(js ((function ()
-                   (let factorial (function (n)
-                                            (if (<= n 1)
-                                                ((return 1))
-                                                ((return (* n (factorial (- n 1))))))))
-                   (return (factorial 5)))))
+  (js ((function ()
+                 (let factorial (function (n)
+                                          (if (<= n 1)
+                                              ((return 1))
+                                              ((return (* n (factorial (- n 1))))))))
+                 (return (factorial 5)))))
   
   (js ((function ()
                  (defn (factorial n)
@@ -333,5 +347,12 @@
                                        [else (+ (fib (- n 1)) (fib (- n 2)))]))))
                  (return (fib 6)))))
   
-
+  (js ((function ()
+                 (let x 5)
+                 (let-syntax m (lambda (stx)
+                                 (syntax-parse stx
+                                   [(_ arg)
+                                    #'((function (arg) (return x)) 6)])))
+                 (return (m x)))))
+  
   )
