@@ -4,6 +4,7 @@
   json
   racket/list
   racket/system
+  syntax/parse/define
   (for-syntax
    racket/base
    racket/pretty
@@ -12,9 +13,9 @@
    syntax/id-table
    (rename-in syntax/parse [define/syntax-parse def/stx])))
 
-(define-syntax-rule 
-  (define-syntax/generics (name pat ...)
-    [(method args ...)
+(define-simple-macro 
+  (define-syntax/generics (name:id pat ...)
+    [(method:id args:id ...)
      body body* ...] ...)
   (define-syntax name
     (generics
@@ -27,13 +28,44 @@
 (begin-for-syntax
   ; Not sure if this is a good idea, but I'm hoping it will give me
   ; better error messages without being verbose.
+  
   (define-syntax-rule (syntax stx) (syntax/loc this-syntax stx))
   (define-syntax-rule (quasisyntax stx) (quasisyntax/loc this-syntax stx))
+
+  ; Tools for capturing binding arrow information
   
-  (define ((expand-to-error message) stx . rest)
-    (raise-syntax-error #f message stx))
+  (define disappeared-uses (make-parameter #f))
+  (define disappeared-bindings (make-parameter #f))
+
+  (define (record-name! stx b)
+    (set-box! b (cons (syntax-property
+                       (syntax-local-introduce stx)
+                       'original-for-check-syntax #t)
+                      (unbox b))))
+  
+  (define (record-use! stx)
+    ; Handle macro invocation syntax
+    (define name (syntax-parse stx
+                   [(head:id . rest) #'head]
+                   [x:id #'x]))
+    (record-name! name (disappeared-uses)))
+
+  (define (record-binding! stx)
+    (record-name! stx (disappeared-bindings)))
+
+  (define (capture-disappeared thunk)
+    (parameterize ([disappeared-uses (box null)] [disappeared-bindings (box null)])
+      (let ([stx (thunk)])
+        (syntax-property
+         (syntax-property
+          stx
+          'disappeared-use (unbox (disappeared-uses)))
+         'disappeared-binding (unbox (disappeared-bindings))))))
 
   ; Expansion
+
+  (define ((expand-to-error message) stx . rest)
+    (raise-syntax-error #f message stx))
   
   (define-syntax-generic js-core-expression
     (expand-to-error "not a js core expression"))
@@ -52,13 +84,17 @@
   
   (define (bind-var! name ctx)
     (syntax-local-bind-syntaxes (list name) (quote-syntax js-var-binding) ctx)
-    (syntax-local-identifier-as-binding (internal-definition-context-introduce ctx name)))
+    (let ([res (syntax-local-identifier-as-binding (internal-definition-context-introduce ctx name 'add))])
+      (record-binding! res)
+      res))
 
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx)
+         (record-use! stx)
          (js-expand-expression (apply-as-transformer js-transformer 'expression ctx stx) ctx)]
       [_ #:when (js-core-expression? stx)
+         (record-use! stx)
          (apply-as-transformer js-core-expression 'expression ctx stx)]
       [_ #:when (js-core-statement-pass1? stx)
          (raise-syntax-error #f "js statement not valid in js expression position" stx)]
@@ -81,8 +117,10 @@
   (define (js-expand-statement-pass1 stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx)
+         (record-use! stx)
          (js-expand-statement-pass1 (apply-as-transformer js-transformer (list ctx) ctx stx) ctx)]
       [_ #:when (js-core-statement-pass1? stx)
+         (record-use! stx)
          (apply-as-transformer js-core-statement-pass1 (list ctx) ctx stx ctx)]
       ; Assume it's an expression; we'll expand those in pass 2.
       [_ stx]))
@@ -137,7 +175,7 @@
 ; Core expressions
 
 (define-syntax/generics (#%js-var x:id)
-  [(js-core-expression) this-syntax]
+  [(js-core-expression) (record-use! #'x) this-syntax]
   [(extract-js-expression idmap)
    (extract-ref #'x idmap)])
 
@@ -188,6 +226,7 @@
 (define-syntax/generics (set! var:id e)
   [(js-core-expression)
    #:fail-unless (js-variable? #'var) (format "expected variable")
+   (record-use! #'var)
    #`(set! var #,(js-expand-expression #'e #f))]
   [(extract-js-expression idmap)
    (hasheq
@@ -238,7 +277,8 @@
 
 (define-syntax/generics (let-syntax m:id e)
   [(js-core-statement-pass1 ctx)
-   (def/stx m^ (internal-definition-context-introduce ctx (syntax-local-identifier-as-binding #'m)))
+   (def/stx m^ (internal-definition-context-introduce ctx (syntax-local-identifier-as-binding #'m) 'add))
+   (record-binding! #'m^)
    (syntax-local-bind-syntaxes (list #'m^) #'(generics
                                               [js-transformer e]) ctx)
    #'(let-syntax m^ e)]
@@ -295,11 +335,13 @@
 (define-syntax js
   (syntax-parser
     [(_ arg)
-     (def/stx expanded-js (extract-js-expression (js-expand-expression #'arg #f) (make-idmap)))
-     #'(begin
-         (define wrapped (hash 'type "ExpressionStatement" 'expression 'expanded-js))
-         ;(pretty-display wrapped)
-         (runjs wrapped))]))
+     (capture-disappeared
+      (lambda ()
+        (def/stx expanded-js (extract-js-expression (js-expand-expression #'arg #f) (make-idmap)))
+        #'(begin
+            (define wrapped (hash 'type "ExpressionStatement" 'expression 'expanded-js))
+            ;(pretty-display wrapped)
+            (runjs wrapped))))]))
 
 ; Finally, some macros! These ones defined outside the language.
 
