@@ -303,9 +303,10 @@
     [(_ arg)
      (capture-disappeared
       (lambda ()
-        (def/stx expanded-js (extract-js-expression (js-expand-expression #'arg #f) (make-idmap)))
+        (def/stx expanded-js (js-expand-expression #'arg #f))
+        (def/stx extracted (extract-js-expression #'expanded-js (make-idmap)))
         #'(begin
-            (define wrapped (hash 'type "ExpressionStatement" 'expression 'expanded-js))
+            (define wrapped (hash 'type "ExpressionStatement" 'expression 'extracted))
             ;(pretty-display wrapped)
             (runjs wrapped))))]))
 
