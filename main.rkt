@@ -131,10 +131,10 @@
 (define (apply-as-transformer f ctx-type ctx . args)
   (define (g stx)
     #`#,(call-with-values (lambda () (apply f (map unwrap (syntax->list stx))))
-                          list))
+                          (lambda vs (map wrap vs))))
   (define res (local-apply-transformer
                g (datum->syntax #f (map wrap args))
                ctx-type (if ctx (list ctx) '())))
-  (apply values (syntax->list res)))
+  (apply values (map unwrap (syntax->list res))))
 
 
