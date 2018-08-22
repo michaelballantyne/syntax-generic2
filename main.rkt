@@ -13,20 +13,51 @@
 (provide define-syntax-generic
          syntax-generic-prop
          generics
-         apply-as-transformer)
+         apply-as-transformer
+
+         record-use!
+         record-binding!
+         capture-disappeared)
+
+; Tools for recording disappeared uses and bindings
+  
+(define disappeared-uses (make-parameter #f))
+(define disappeared-bindings (make-parameter #f))
+
+(define (record-name! stx b)
+  (set-box! b (cons (syntax-property
+                     (syntax-local-introduce stx)
+                     'original-for-check-syntax #t)
+                    (unbox b))))
+  
+(define (record-use! name)
+  (record-name! name (disappeared-uses)))
+
+(define (record-binding! stx)
+  (record-name! stx (disappeared-bindings)))
+
+(define (capture-disappeared thunk)
+  (parameterize ([disappeared-uses (box null)] [disappeared-bindings (box null)])
+    (let ([stx (thunk)])
+      (syntax-property
+       (syntax-property
+        stx
+        'disappeared-use (unbox (disappeared-uses)))
+       'disappeared-binding (unbox (disappeared-bindings))))))
+
+; Syntax generics
 
 (define (get-procedure prop-pred prop-ref stx-arg)
-  (define v
+  (define head
     (syntax-parse stx-arg
       [v:id
        #'v]
       [(v:id . rest)
        #'v]
       [_ #f]))
-  #;(displayln (syntax-debug-info v))
-  (and v
-       (let ([v (syntax-local-value v (lambda () #f))])
-         #;(displayln v)
+  (and head
+       (let ([v (syntax-local-value head (lambda () #f))])
+         (when v (record-use! head))
          (and (prop-pred v)
               ((prop-ref v) v)))))
 
@@ -83,6 +114,8 @@
            #:property prop:procedure (lambda (s stx) (expander stx))
            (~@ #:property (syntax-generic-prop gen) (lambda (st) func)) ...)
          (s))]))
+
+; Apply as transformer
 
 (struct wrapper (contents))
 (define (wrap arg)

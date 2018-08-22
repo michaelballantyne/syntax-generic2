@@ -32,36 +32,6 @@
   (define-syntax-rule (syntax stx) (syntax/loc this-syntax stx))
   (define-syntax-rule (quasisyntax stx) (quasisyntax/loc this-syntax stx))
 
-  ; Tools for capturing binding arrow information
-  
-  (define disappeared-uses (make-parameter #f))
-  (define disappeared-bindings (make-parameter #f))
-
-  (define (record-name! stx b)
-    (set-box! b (cons (syntax-property
-                       (syntax-local-introduce stx)
-                       'original-for-check-syntax #t)
-                      (unbox b))))
-  
-  (define (record-use! stx)
-    ; Handle macro invocation syntax
-    (define name (syntax-parse stx
-                   [(head:id . rest) #'head]
-                   [x:id #'x]))
-    (record-name! name (disappeared-uses)))
-
-  (define (record-binding! stx)
-    (record-name! stx (disappeared-bindings)))
-
-  (define (capture-disappeared thunk)
-    (parameterize ([disappeared-uses (box null)] [disappeared-bindings (box null)])
-      (let ([stx (thunk)])
-        (syntax-property
-         (syntax-property
-          stx
-          'disappeared-use (unbox (disappeared-uses)))
-         'disappeared-binding (unbox (disappeared-bindings))))))
-
   ; Expansion
 
   (define ((expand-to-error message) stx . rest)
@@ -91,10 +61,8 @@
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx)
-         (record-use! stx)
          (js-expand-expression (apply-as-transformer js-transformer 'expression ctx stx) ctx)]
       [_ #:when (js-core-expression? stx)
-         (record-use! stx)
          (apply-as-transformer js-core-expression 'expression ctx stx)]
       [_ #:when (js-core-statement-pass1? stx)
          (raise-syntax-error #f "js statement not valid in js expression position" stx)]
@@ -117,10 +85,8 @@
   (define (js-expand-statement-pass1 stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx)
-         (record-use! stx)
          (js-expand-statement-pass1 (apply-as-transformer js-transformer (list ctx) ctx stx) ctx)]
       [_ #:when (js-core-statement-pass1? stx)
-         (record-use! stx)
          (apply-as-transformer js-core-statement-pass1 (list ctx) ctx stx ctx)]
       ; Assume it's an expression; we'll expand those in pass 2.
       [_ stx]))
