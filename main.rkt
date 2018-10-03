@@ -31,10 +31,12 @@
                     (unbox b))))
   
 (define (record-use! name)
-  (record-name! name (disappeared-uses)))
+  (when (disappeared-uses)
+    (record-name! name (disappeared-uses))))
 
 (define (record-binding! stx)
-  (record-name! stx (disappeared-bindings)))
+  (when (disappeared-bindings)
+    (record-name! stx (disappeared-bindings))))
 
 (define (capture-disappeared thunk)
   (parameterize ([disappeared-uses (box null)] [disappeared-bindings (box null)])
@@ -47,7 +49,7 @@
 
 ; Syntax generics
 
-(define (get-procedure prop-pred prop-ref stx-arg)
+(define (get-procedure prop-pred prop-ref stx-arg ctx)
   (define head
     (syntax-parse stx-arg
       [v:id
@@ -56,17 +58,18 @@
        #'v]
       [_ #f]))
   (and head
-       (let ([v (syntax-local-value head (lambda () #f))])
+       (let ([v (syntax-local-value head (lambda () #f) ctx)])
          (when v (record-use! head))
          (and (prop-pred v)
               ((prop-ref v) v)))))
 
-(define ((make-predicate prop-pred prop-ref) stx-arg)
-  (if (get-procedure prop-pred prop-ref stx-arg) #t #f))
+; The predicate may need an extended local context for syntax-local-value
+(define ((make-predicate prop-pred prop-ref) stx-arg [ctx #f])
+  (if (get-procedure prop-pred prop-ref stx-arg ctx) #t #f))
 
 (define ((make-dispatch gen-name prop-pred prop-ref fallback) stx-arg . args)
   (define f
-    (or (get-procedure prop-pred prop-ref stx-arg)
+    (or (get-procedure prop-pred prop-ref stx-arg #f)
         fallback))
   (apply f stx-arg args))
 
