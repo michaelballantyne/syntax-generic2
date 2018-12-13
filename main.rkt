@@ -57,8 +57,12 @@
       [(v:id . rest)
        #'v]
       [_ #f]))
+  (define head^
+    (if (and head ctx)
+        (internal-definition-context-introduce ctx head 'add)
+        head))
   (and head
-       (let ([v (syntax-local-value head (lambda () #f) ctx)])
+       (let ([v (syntax-local-value head^ (lambda () #f) ctx)])
          (when v (record-use! head))
          (and (prop-pred v)
               ((prop-ref v) v)))))

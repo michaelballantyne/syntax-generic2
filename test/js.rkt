@@ -13,18 +13,6 @@
    syntax/id-table
    (rename-in syntax/parse [define/syntax-parse def/stx])))
 
-(define-simple-macro 
-  (define-syntax/generics (name:id pat ...)
-    [(method:id args:id ...)
-     body body* ...] ...)
-  (define-syntax name
-    (generics
-     [method (lambda (stx args ...)
-               (syntax-parse stx
-                 [(name pat ...)
-                  body body* ...]))]
-     ...)))
-
 (begin-for-syntax
   ; Not sure if this is a good idea, but I'm hoping it will give me
   ; better error messages without being verbose.
@@ -52,24 +40,27 @@
     (generics
      [js-variable (lambda (stx) stx)]))
   
-  (define (bind-var! name ctx)
-    (syntax-local-bind-syntaxes (list name) (quote-syntax js-var-binding) ctx)
-    (let ([res (syntax-local-identifier-as-binding (internal-definition-context-introduce ctx name 'add))])
+  (define (bind! name binding ctx)
+    (syntax-local-bind-syntaxes (list name) binding ctx)
+    (let ([res (internal-definition-context-introduce ctx name 'add)])
       (record-binding! res)
       res))
 
+  (define (bind-var! name ctx)
+    (bind! name (quote-syntax js-var-binding) ctx))
+
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
-      [_ #:when (js-transformer? stx)
+      [_ #:when (js-transformer? stx ctx)
          (js-expand-expression (apply-as-transformer js-transformer 'expression ctx stx) ctx)]
-      [_ #:when (js-core-expression? stx)
+      [_ #:when (js-core-expression? stx ctx)
          (apply-as-transformer js-core-expression 'expression ctx stx)]
-      [_ #:when (js-core-statement-pass1? stx)
+      [_ #:when (js-core-statement-pass1? stx ctx)
          (raise-syntax-error #f "js statement not valid in js expression position" stx)]
 
       ; implicits / interposition points
       [x:id
-       #:when (js-variable? stx)
+       #:when (js-variable? stx ctx)
        (with-syntax ([var (datum->syntax stx '#%js-var)])
          (js-expand-expression #'(var x) ctx))]
       [n:number
@@ -82,9 +73,9 @@
       [else
        (raise-syntax-error #f "not a js expression" stx)]))
 
-  (define (js-expand-statement-pass1 stx ctx)
+  (define (js-expand-statement-pass1 stx ctx)    
     (syntax-parse stx
-      [_ #:when (js-transformer? stx)
+      [_ #:when (js-transformer? stx ctx)
          (js-expand-statement-pass1 (apply-as-transformer js-transformer (list ctx) ctx stx) ctx)]
       [_ #:when (js-core-statement-pass1? stx)
          (apply-as-transformer js-core-statement-pass1 (list ctx) ctx stx ctx)]
@@ -93,7 +84,7 @@
 
   (define (js-expand-statement-pass2 stx ctx)
     (syntax-parse stx
-      [_ #:when (js-core-statement-pass2? stx)
+      [_ #:when (js-core-statement-pass2? stx ctx)
          (apply-as-transformer js-core-statement-pass2 (list ctx) ctx stx)]
       [_ (js-expand-expression stx ctx)]))
 
@@ -243,10 +234,7 @@
 
 (define-syntax/generics (let-syntax m:id e)
   [(js-core-statement-pass1 ctx)
-   (def/stx m^ (internal-definition-context-introduce ctx (syntax-local-identifier-as-binding #'m) 'add))
-   (record-binding! #'m^)
-   (syntax-local-bind-syntaxes (list #'m^) #'(generics
-                                              [js-transformer e]) ctx)
+   (def/stx m^ (bind! #'m #'(generics [js-transformer e]) ctx))
    #'(let-syntax m^ e)]
   [(js-core-statement-pass2) this-syntax]
   [(extract-js-statement idmap)
@@ -345,11 +333,11 @@
                                               ((return 1))
                                               ((return (* n (factorial (- n 1))))))))
                  (return (factorial 5)))))
- ; Broken due to expander bug.
- #;(js ((function ()
-                 (defn (factorial n)
-                   (return (? (<= n 1) 1 (* n (factorial (- n 1))))))
-                 (return (factorial 5)))))
+  ; Broken due to expander bug.
+  #;(js ((function ()
+                   (defn (factorial n)
+                     (return (? (<= n 1) 1 (* n (factorial (- n 1))))))
+                   (return (factorial 5)))))
   
 
   (js ((function ()
@@ -372,13 +360,22 @@
                  (return (fib 6)))))
 
   ; A macro defined inside the langauge. Also a use-site binder test.
-  ; Broken due to expander bug.
-  #;(js ((function ()
+  (js ((function ()
                  (let x 5)
                  (let-syntax m (lambda (stx)
                                  (syntax-parse stx
                                    [(_ arg)
                                     #'((function (arg) (return x)) 6)])))
                  (return (m x)))))
+
+  ; Same as previous, but at statement rather than expression position.
+  (js ((function ()
+                 (let x 5)
+                 (let-syntax m (lambda (stx)
+                                 (syntax-parse stx
+                                   [(_ arg)
+                                    #'(return ((function (arg) (return x)) 6))])))
+                 (inc! x)
+                 (m x))))
   
   )
