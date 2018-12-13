@@ -5,6 +5,7 @@
   racket/list
   racket/system
   syntax/parse/define
+  syntax-generic2/define
   (for-syntax
    racket/base
    racket/pretty
@@ -36,18 +37,10 @@
   (define-syntax-generic js-transformer
     (expand-to-error "not a js form"))
 
-  (define js-var-binding
-    (generics
-     [js-variable (lambda (stx) stx)]))
-  
-  (define (bind! name binding ctx)
-    (syntax-local-bind-syntaxes (list name) binding ctx)
-    (let ([res (internal-definition-context-introduce ctx name 'add)])
-      (record-binding! res)
-      res))
-
   (define (bind-var! name ctx)
-    (bind! name (quote-syntax js-var-binding) ctx))
+    (bind! name (generics
+                 [js-variable (lambda (stx) stx)])
+           ctx))
 
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
@@ -101,6 +94,7 @@
     (expand-to-error "form does not support compilation to JS"))
   (define-syntax-generic extract-js-statement
     (lambda (stx idmap)
+      ; If it didn't match as a statement, it should be an expression
       (hash
        'type "ExpressionStatement"
        'expression (extract-js-expression stx idmap))))

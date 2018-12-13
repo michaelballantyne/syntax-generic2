@@ -17,7 +17,9 @@
 
          record-use!
          record-binding!
-         capture-disappeared)
+         capture-disappeared
+
+         bind!)
 
 ; Tools for recording disappeared uses and bindings
   
@@ -37,6 +39,13 @@
 (define (record-binding! stx)
   (when (disappeared-bindings)
     (record-name! stx (disappeared-bindings))))
+
+(define (bind! name binding ctx)
+  ; local 3D syntax is fine, right?
+  (syntax-local-bind-syntaxes (list name) (and binding #`#,binding) ctx)
+  (let ([res (internal-definition-context-introduce ctx name 'add)])
+    (record-binding! res)
+    res))
 
 (define (capture-disappeared thunk)
   (parameterize ([disappeared-uses (box null)] [disappeared-bindings (box null)])
