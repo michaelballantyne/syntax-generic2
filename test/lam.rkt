@@ -41,8 +41,9 @@
 (define-syntax/generics (lam-λ (x:id) e)
   [(lam-core)
    (define ctx (syntax-local-make-definition-context))
-   (def/stx x^ (bind! #'x lam-var-binding ctx))
-   (def/stx e^ (expand-lam #'e ctx))
+   (define sc (make-syntax-introducer))                 ; TODO: too many steps for a binding!
+   (def/stx x^ (bind! (sc #'x) lam-var-binding ctx))
+   (def/stx e^ (expand-lam (sc #'e) ctx))
    #`(lam-λ (x^) e^)])
 
 (define-syntax/generics (lam-app e1 e2)
