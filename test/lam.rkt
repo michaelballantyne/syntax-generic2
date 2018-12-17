@@ -25,25 +25,23 @@
   ; Jobs of the core dispatch loop:
   ;  * Translate the minimal concrete syntax of references and applications to abstract syntax
   ;  * Dispatch to core forms and transformers.
-  (define (expand-lam stx [ctx #f])
+  (define (expand-lam stx [sc #f])
     (cond
       [(lam-core? stx)
-       (apply-as-transformer lam-core 'expression ctx stx)]
+       (apply-as-transformer lam-core 'expression sc stx)]
       [else (raise-syntax-error 'lam "not a lambda calculus expression" stx)])))
 
 (define-syntax/generics (lam-ref x:id)
   [(lam-core)
    (unless (lam-var? #'x)
      (raise-syntax-error 'lam "unbound reference" #'x))
-   (record-use! #'x)
    #`(lam-ref x)])
 
 (define-syntax/generics (lam-λ (x:id) e)
   [(lam-core)
-   (define ctx (syntax-local-make-definition-context))
-   (define sc (make-syntax-introducer))                 ; TODO: too many steps for a binding!
-   (def/stx x^ (bind! (sc #'x) lam-var-binding ctx))
-   (def/stx e^ (expand-lam (sc #'e) ctx))
+   (define sc (make-scope))
+   (def/stx x^ (bind! sc #'x lam-var-binding))
+   (def/stx e^ (expand-lam #'e sc))
    #`(lam-λ (x^) e^)])
 
 (define-syntax/generics (lam-app e1 e2)

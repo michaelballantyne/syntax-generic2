@@ -37,10 +37,10 @@
   (define-syntax-generic js-transformer
     (expand-to-error "not a js form"))
 
-  (define (bind-var! name ctx)
-    (bind! name (generics
-                 [js-variable (lambda (stx) stx)])
-           ctx))
+  (define (bind-var! name sc)
+    (bind! sc name
+           (generics
+            [js-variable (lambda (stx) stx)])))
 
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
@@ -81,12 +81,13 @@
          (apply-as-transformer js-core-statement-pass2 (list ctx) ctx stx)]
       [_ (js-expand-expression stx ctx)]))
 
-  (define (expand-block body ctx)
+  (define (expand-block body parent-sc)
+    (define sc (make-scope parent-sc))
     (define body^
-      (for/list ([b (syntax->list ((make-syntax-introducer #f) body))])
-        (js-expand-statement-pass1 b ctx)))
+      (for/list ([b (syntax->list body)])
+        (js-expand-statement-pass1 b sc)))
     (for/list ([b body^])
-      (js-expand-statement-pass2 b ctx)))
+      (js-expand-statement-pass2 b sc)))
 
   ; Compilation to JS
   
@@ -126,7 +127,10 @@
 ; Core expressions
 
 (define-syntax/generics (#%js-var x:id)
-  [(js-core-expression) (record-use! #'x) this-syntax]
+  [(js-core-expression)
+   (when (not (js-variable? #'x))
+     (raise-syntax-error #f "unbound identifier" #'x))
+   this-syntax]
   [(extract-js-expression idmap)
    (extract-ref #'x idmap)])
 
@@ -161,12 +165,12 @@
 
 (define-syntax/generics (function (x:id ...) body ...)
   [(js-core-expression)
-   (define ctx (syntax-local-make-definition-context))
+   (define sc (make-scope))
    (def/stx (x^ ...)
      (for/list ([x (syntax->list #'(x ...))])
-       (bind-var! x ctx)))
+       (bind-var! x sc)))
    (def/stx (body^ ...)
-     (expand-block #'(body ...) ctx))
+     (expand-block #'(body ...) sc))
    #'(function (x^ ...) body^ ...)]
   [(extract-js-expression idmap)
    (hasheq
@@ -177,7 +181,6 @@
 (define-syntax/generics (set! var:id e)
   [(js-core-expression)
    #:fail-unless (js-variable? #'var) (format "expected variable")
-   (record-use! #'var)
    #`(set! var #,(js-expand-expression #'e #f))]
   [(extract-js-expression idmap)
    (hasheq
@@ -227,8 +230,8 @@
            'init (extract-js-expression #'e idmap))))])
 
 (define-syntax/generics (let-syntax m:id e)
-  [(js-core-statement-pass1 ctx)
-   (def/stx m^ (bind! #'m #'(generics [js-transformer e]) ctx))
+  [(js-core-statement-pass1 sc)
+   (def/stx m^ (bind! sc #'m #'(generics [js-transformer e])))
    #'(let-syntax m^ e)]
   [(js-core-statement-pass2) this-syntax]
   [(extract-js-statement idmap)
@@ -246,9 +249,9 @@
 (define-syntax/generics (while condition body ...)
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
-   (define ctx (syntax-local-make-definition-context))
+   (define sc (make-scope))
    #`(while #,(js-expand-expression #'condition #f)
-            #,@(expand-block #'(body ...) ctx))]
+            #,@(expand-block #'(body ...) sc))]
   [(extract-js-statement idmap)
    (hasheq
     'type "WhileStatement"
@@ -259,8 +262,8 @@
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
    #`(if #,(js-expand-expression #'c #f)
-         #,(expand-block #'(b1 ...) (syntax-local-make-definition-context))
-         #,(expand-block #'(b2 ...) (syntax-local-make-definition-context)))]
+         #,(expand-block #'(b1 ...) (make-scope))
+         #,(expand-block #'(b2 ...) (make-scope)))]
   [(extract-js-statement idmap)
    (hasheq
     'type "IfStatement"

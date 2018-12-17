@@ -3,6 +3,8 @@
 (require
   syntax/parse
   syntax/apply-transformer
+  data/maybe
+  racket/match
   (for-syntax
    racket/base
    syntax/parse
@@ -15,11 +17,13 @@
          generics
          apply-as-transformer
 
-         record-use!
-         record-binding!
+         ;record-use!
+         ;record-binding!
          capture-disappeared
 
-         bind!)
+         make-scope
+         bind!
+         lookup)
 
 ; Tools for recording disappeared uses and bindings
   
@@ -40,13 +44,6 @@
   (when (disappeared-bindings)
     (record-name! stx (disappeared-bindings))))
 
-(define (bind! name binding ctx)
-  ; local 3D syntax is fine, right?
-  (syntax-local-bind-syntaxes (list name) (and binding #`#,binding) ctx)
-  (let ([res (internal-definition-context-introduce ctx name 'add)])
-    (record-binding! res)
-    res))
-
 (define (capture-disappeared thunk)
   (parameterize ([disappeared-uses (box null)] [disappeared-bindings (box null)])
     (let ([stx (thunk)])
@@ -56,9 +53,66 @@
         'disappeared-use (unbox (disappeared-uses)))
        'disappeared-binding (unbox (disappeared-bindings))))))
 
+
+(struct scope [defctx introducers])
+
+(define (make-scope [parent #f])
+  (define defctx
+    (if parent
+        (scope-defctx parent)
+        (syntax-local-make-definition-context)))
+  (define introducers
+    (cons (make-syntax-introducer #f)
+          (if parent
+              (scope-introducers parent)
+              '())))
+  (scope defctx introducers))
+
+(define (in-scope sc stx)
+  (if sc
+      (internal-definition-context-introduce
+       (scope-defctx sc)
+       (for/fold ([stx stx])
+                 ([i (scope-introducers sc)])
+         (i stx 'add))
+       'add)
+      stx))
+
+(define (lookup sc id)
+  (define the-unbound-value (cons 'foo '()))
+  
+  (define id-in-sc (in-scope sc id))
+  
+  (define val
+    (syntax-local-value
+     id-in-sc
+     (lambda () the-unbound-value)
+     (and sc (scope-defctx sc))))
+
+  (if (eq? val the-unbound-value)
+      nothing
+      (begin
+        (record-use! id-in-sc)
+        (just val))))
+
+(define (bind! sc id rhs)
+  (define id-in-sc (in-scope sc id))
+  
+  (syntax-local-bind-syntaxes
+   (list id-in-sc)
+   (cond
+     [(syntax? rhs) rhs]
+     [rhs #`(quote #,rhs)]
+     [else #f])
+   (and sc (scope-defctx sc)))
+  
+  (record-binding! id-in-sc)
+  
+  id-in-sc)
+
 ; Syntax generics
 
-(define (get-procedure prop-pred prop-ref stx-arg ctx)
+(define (get-procedure prop-pred prop-ref stx-arg sc)
   (define head
     (syntax-parse stx-arg
       [v:id
@@ -66,19 +120,17 @@
       [(v:id . rest)
        #'v]
       [_ #f]))
-  (define head^
-    (if (and head ctx)
-        (internal-definition-context-introduce ctx head 'add)
-        head))
   (and head
-       (let ([v (syntax-local-value head^ (lambda () #f) ctx)])
-         (when v (record-use! head))
-         (and (prop-pred v)
-              ((prop-ref v) v)))))
+       (let ([v (lookup sc head)])
+         (match v
+           [(nothing) #f]
+           [(just v)
+            (and (prop-pred v)
+                 ((prop-ref v) v))]))))
 
 ; The predicate may need an extended local context for syntax-local-value
-(define ((make-predicate prop-pred prop-ref) stx-arg [ctx #f])
-  (if (get-procedure prop-pred prop-ref stx-arg ctx) #t #f))
+(define ((make-predicate prop-pred prop-ref) stx-arg [sc #f])
+  (if (get-procedure prop-pred prop-ref stx-arg sc) #t #f))
 
 (define ((make-dispatch gen-name prop-pred prop-ref fallback) stx-arg . args)
   (define f
@@ -144,13 +196,13 @@
       (wrapper-contents (syntax-e arg))
       arg))
 
-(define (apply-as-transformer f ctx-type ctx . args)
+(define (apply-as-transformer f ctx-type sc . args)
   (define (g stx)
     #`#,(call-with-values (lambda () (apply f (map unwrap (syntax->list stx))))
                           (lambda vs (map wrap vs))))
   (define res (local-apply-transformer
-               g (datum->syntax #f (map wrap args))
-               ctx-type (if ctx (list ctx) '())))
+               g (in-scope sc (datum->syntax #f (map wrap args)))
+               ctx-type (if sc (list (scope-defctx sc)) '())))
   (apply values (map unwrap (syntax->list res))))
 
 
