@@ -3,7 +3,6 @@
 (require
   syntax/parse
   syntax/apply-transformer
-  data/maybe
   racket/match
   (for-syntax
    racket/base
@@ -17,10 +16,11 @@
          generics
          apply-as-transformer
 
-         ;record-use!
-         ;record-binding!
          capture-disappeared
 
+         unbound
+         racket-variable
+         
          make-scope
          bind!
          lookup)
@@ -78,22 +78,35 @@
        'add)
       stx))
 
-(define (lookup sc id)
-  (define the-unbound-value (cons 'foo '()))
-  
+(define unbound
+  (let ()
+    (struct unbound [])
+    (unbound)))
+
+(define racket-variable
+  (let ()
+    (struct racket-variable [])
+    (racket-variable)))
+
+
+(define (lookup sc id)  
   (define id-in-sc (in-scope sc id))
   
   (define val
     (syntax-local-value
      id-in-sc
-     (lambda () the-unbound-value)
+     (lambda () unbound)
      (and sc (scope-defctx sc))))
 
-  (if (eq? val the-unbound-value)
-      nothing
+  (if (eq? val unbound)
+      (if (identifier-binding id-in-sc)
+          (begin
+            (record-use! id-in-sc)
+            racket-variable)
+          unbound)
       (begin
         (record-use! id-in-sc)
-        (just val))))
+        val)))
 
 (define (bind! sc id rhs)
   (define id-in-sc (in-scope sc id))
@@ -102,8 +115,8 @@
    (list id-in-sc)
    (cond
      [(syntax? rhs) rhs]
-     [rhs #`(quote #,rhs)]
-     [else #f])
+     [(eq? racket-variable rhs) #f]
+     [else #`(quote #,rhs)])
    (and sc (scope-defctx sc)))
   
   (record-binding! id-in-sc)
@@ -122,11 +135,9 @@
       [_ #f]))
   (and head
        (let ([v (lookup sc head)])
-         (match v
-           [(nothing) #f]
-           [(just v)
-            (and (prop-pred v)
-                 ((prop-ref v) v))]))))
+         (and
+          (prop-pred v)
+          ((prop-ref v) v)))))
 
 ; The predicate may need an extended local context for syntax-local-value
 (define ((make-predicate prop-pred prop-ref) stx-arg [sc #f])
