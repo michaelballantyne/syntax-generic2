@@ -3,7 +3,7 @@
 (require
   syntax/parse
   syntax/apply-transformer
-  racket/match
+  racket/syntax
   (for-syntax
    racket/base
    syntax/parse
@@ -11,70 +11,88 @@
    racket/syntax)
   (for-template racket/base))
 
-(provide define-syntax-generic
-         syntax-generic-prop
-         generics
-         apply-as-transformer
+(provide 
+ with-disappeared-uses-and-bindings
+ record-disappeared-bindings
+ 
+ unbound
+ racket-variable
 
-         capture-disappeared
+ scope?
+ make-scope
+ defctx->scope
+ scope-bind!
+ scope-lookup
+ 
+ apply-as-transformer
+ 
+ define-syntax-generic
+ generics
+ syntax-generic-prop
+ )
 
-         unbound
-         racket-variable
-         
-         make-scope
-         bind!
-         lookup)
-
-; Tools for recording disappeared uses and bindings
+; racket/syntax currently has tools for disappeared uses,
+; but not disappeared bindings. This is a copy-paste-and-modify job
+; that should be integrated into a future release of that collection.
   
-(define disappeared-uses (make-parameter #f))
-(define disappeared-bindings (make-parameter #f))
+(define current-recorded-disappeared-bindings (make-parameter #f))
 
-(define (record-name! stx b)
-  (set-box! b (cons (syntax-property
-                     (syntax-local-introduce stx)
-                     'original-for-check-syntax #t)
-                    (unbox b))))
-  
-(define (record-use! name)
-  (when (disappeared-uses)
-    (record-name! name (disappeared-uses))))
+(define (record-disappeared-bindings ids)
+  (cond
+    [(identifier? ids) (record-disappeared-bindings (list ids))]
+    [(and (list? ids) (andmap identifier? ids))
+     (let ([uses (current-recorded-disappeared-bindings)])
+       (when uses
+         (current-recorded-disappeared-bindings 
+          (append
+           (if (syntax-transforming?)
+               (map syntax-local-introduce ids)
+               ids)
+           uses))))]
+    [else (raise-argument-error 'record-disappeared-bindings
+                                "(or/c identifier? (listof identifier?))"
+                                ids)]))
 
-(define (record-binding! stx)
-  (when (disappeared-bindings)
-    (record-name! stx (disappeared-bindings))))
+(define-syntax-rule (with-disappeared-bindings body-expr ... stx-expr)
+  (let-values ([(stx disappeared-bindings)
+                (parameterize ((current-recorded-disappeared-bindings null))
+                  (let ([result (let () body-expr ... stx-expr)])
+                    (values result (current-recorded-disappeared-bindings))))])
+    (syntax-property stx
+                     'disappeared-binding
+                     (append (or (syntax-property stx 'disappeared-binding) null)
+                             disappeared-bindings))))
 
-(define (capture-disappeared thunk)
-  (parameterize ([disappeared-uses (box null)] [disappeared-bindings (box null)])
-    (let ([stx (thunk)])
-      (syntax-property
-       (syntax-property
-        stx
-        'disappeared-use (unbox (disappeared-uses)))
-       'disappeared-binding (unbox (disappeared-bindings))))))
+(define-syntax-rule (with-disappeared-uses-and-bindings body-expr ... stx-expr)
+  (with-disappeared-uses
+      (with-disappeared-bindings
+          body-expr ... stx-expr)))
 
+; Higher-level APIs for scope and binding
 
 (struct scope [defctx introducers])
 
 (define (make-scope [parent #f])
-  (define defctx
-    (if parent
-        (scope-defctx parent)
-        (syntax-local-make-definition-context)))
-  (define introducers
-    (cons (make-syntax-introducer #f)
-          (if parent
-              (scope-introducers parent)
-              '())))
-  (scope defctx introducers))
+  (unless (or (eq? #f parent) (scope? parent))
+    (raise-argument-error
+     'make-scope
+     "(or/c scope? #f)"
+     parent))
+  (scope (if parent
+             (scope-defctx parent)
+             (syntax-local-make-definition-context))
+         (cons (make-syntax-introducer #t)
+               (if parent
+                   (scope-introducers parent)
+                   '()))))
 
 (define (in-scope sc stx)
   (if sc
       (internal-definition-context-introduce
        (scope-defctx sc)
        (for/fold ([stx stx])
-                 ([i (scope-introducers sc)])
-         (i stx 'add))
+                 ([introducer (scope-introducers sc)])
+         (introducer stx 'add))
        'add)
       stx))
 
@@ -88,27 +106,49 @@
     (struct racket-variable [])
     (racket-variable)))
 
-
-(define (lookup sc id)  
+; Note / TODO: this will consider both out-of-context references and
+; identifiers bound to Racket runtime variables as unbound, just
+; like syntax-local-value. To do better requires a new expander API,
+; as proposed in https://github.com/racket/racket/pull/2300
+; A good implementation of that API would implement racket-variable above.
+; TODO: should this use a failure-thunk instead of the unbound value?
+(define (scope-lookup sc id)
+  (unless (or (eq? #f sc) (scope? sc))
+    (raise-argument-error
+     'scope-lookup
+     "(or/c scope? #f)"
+     sc))
+  (unless (identifier? id)
+    (raise-argument-error
+     'scope-lookup
+     "identifier?"
+     id))
+  
   (define id-in-sc (in-scope sc id))
   
-  (define val
+  (define result
     (syntax-local-value
      id-in-sc
      (lambda () unbound)
      (and sc (scope-defctx sc))))
 
-  (if (eq? val unbound)
-      (if (identifier-binding id-in-sc)
-          (begin
-            (record-use! id-in-sc)
-            racket-variable)
-          unbound)
-      (begin
-        (record-use! id-in-sc)
-        val)))
+  (unless (eq? result unbound)
+    (record-disappeared-uses id-in-sc))
+  
+  result)
 
-(define (bind! sc id rhs)
+(define (scope-bind! sc id rhs)
+  (unless (or (eq? #f sc) (scope? sc))
+    (raise-argument-error
+     'scope-bind!
+     "(or/c scope? #f)"
+     sc))
+  (unless (identifier? id)
+    (raise-argument-error
+     'scope-bind!
+     "identifier?"
+     id))
+  
   (define id-in-sc (in-scope sc id))
   
   (syntax-local-bind-syntaxes
@@ -116,28 +156,76 @@
    (cond
      [(syntax? rhs) rhs]
      [(eq? racket-variable rhs) #f]
-     [else #`(quote #,rhs)])
+     [else (datum->syntax (quote-syntax here) (list 'quote rhs))])
    (and sc (scope-defctx sc)))
   
-  (record-binding! id-in-sc)
+  (record-disappeared-bindings id-in-sc)
   
   id-in-sc)
+
+(define (defctx->scope defctx)
+  (unless (internal-definition-context? defctx)
+    (raise-argument-error
+     'defctx->scope
+     "internal-definition-context?"
+     defctx))
+  (scope defctx '()))
+
+; Apply as transformer
+
+(struct wrapper (contents))
+
+(define (wrap arg)
+  (if (syntax? arg)
+      arg
+      (wrapper arg)))
+
+(define (unwrap arg)
+  (if (syntax? arg)
+      (let ([e (syntax-e arg)])
+        (if (wrapper? e)
+            (wrapper-contents e)
+            arg))
+      arg))
+
+(define (apply-as-transformer f ctx-type sc . args)
+  (unless (procedure? f)
+    (raise-argument-error
+     'apply-as-transformer
+     "procedure?"
+     f))
+  (unless (or (eq? #f sc) (scope? sc))
+    (raise-argument-error
+     'apply-as-transformer
+     "(or/c scope? #f)"
+     sc))
+
+  (define (single-argument-transformer stx)
+    (call-with-values
+     (lambda () (apply f (map unwrap (syntax->list stx))))
+     (lambda vs (datum->syntax #f (map wrap vs)))))
+  
+  (define res
+    (local-apply-transformer
+     single-argument-transformer
+     (in-scope sc (datum->syntax #f (map wrap args)))
+     ctx-type
+     (if sc (list (scope-defctx sc)) '())))
+  
+  (apply values (map unwrap (syntax->list res))))
 
 ; Syntax generics
 
 (define (get-procedure prop-pred prop-ref stx-arg sc)
   (define head
-    (syntax-parse stx-arg
-      [v:id
-       #'v]
-      [(v:id . rest)
-       #'v]
+    (syntax-case stx-arg ()
+      [v (identifier? #'v) #'v]
+      [(v . rest) (identifier? #'v) #'v]
       [_ #f]))
   (and head
-       (let ([v (lookup sc head)])
-         (and
-          (prop-pred v)
-          ((prop-ref v) v)))))
+       (let ([v (scope-lookup sc head)])
+         (and (prop-pred v)
+              ((prop-ref v) v)))))
 
 ; The predicate may need an extended local context for syntax-local-value
 (define ((make-predicate prop-pred prop-ref) stx-arg [sc #f])
@@ -194,26 +282,5 @@
            (~@ #:property (syntax-generic-prop gen) (lambda (st) func)) ...)
          (s))]))
 
-; Apply as transformer
-
-(struct wrapper (contents))
-(define (wrap arg)
-  (if (syntax? arg)
-      arg
-      (wrapper arg)))
-
-(define (unwrap arg)
-  (if (and (syntax? arg) (wrapper? (syntax-e arg)))
-      (wrapper-contents (syntax-e arg))
-      arg))
-
-(define (apply-as-transformer f ctx-type sc . args)
-  (define (g stx)
-    #`#,(call-with-values (lambda () (apply f (map unwrap (syntax->list stx))))
-                          (lambda vs (map wrap vs))))
-  (define res (local-apply-transformer
-               g (in-scope sc (datum->syntax #f (map wrap args)))
-               ctx-type (if sc (list (scope-defctx sc)) '())))
-  (apply values (map unwrap (syntax->list res))))
 
 

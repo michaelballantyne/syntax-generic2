@@ -38,9 +38,9 @@
     (expand-to-error "not a js form"))
 
   (define (bind-var! name sc)
-    (bind! sc name
-           (generics
-            [js-variable (lambda (stx) stx)])))
+    (scope-bind! sc name
+                 (generics
+                  [js-variable (lambda (stx) stx)])))
 
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
@@ -231,7 +231,7 @@
 
 (define-syntax/generics (let-syntax m:id e)
   [(js-core-statement-pass1 sc)
-   (def/stx m^ (bind! sc #'m #'(generics [js-transformer e])))
+   (def/stx m^ (scope-bind! sc #'m #'(generics [js-transformer e])))
    #'(let-syntax m^ e)]
   [(js-core-statement-pass2) this-syntax]
   [(extract-js-statement idmap)
@@ -286,14 +286,13 @@
 (define-syntax js
   (syntax-parser
     [(_ arg)
-     (capture-disappeared
-      (lambda ()
-        (def/stx expanded-js (js-expand-expression #'arg #f))
-        (def/stx extracted (extract-js-expression #'expanded-js (make-idmap)))
-        #'(begin
-            (define wrapped (hash 'type "ExpressionStatement" 'expression 'extracted))
-            ;(pretty-display wrapped)
-            (runjs wrapped))))]))
+     (with-disappeared-uses-and-bindings
+       (def/stx expanded-js (js-expand-expression #'arg #f))
+       (def/stx extracted (extract-js-expression #'expanded-js (make-idmap)))
+       #'(begin
+           (define wrapped (hash 'type "ExpressionStatement" 'expression 'extracted))
+           ;(pretty-display wrapped)
+           (runjs wrapped)))]))
 
 ; Finally, some macros! These ones defined outside the language.
 

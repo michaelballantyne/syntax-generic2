@@ -40,7 +40,7 @@
 (define-syntax/generics (lam-λ (x:id) e)
   [(lam-core)
    (define sc (make-scope))
-   (def/stx x^ (bind! sc #'x lam-var-binding))
+   (def/stx x^ (scope-bind! sc #'x lam-var-binding))
    (def/stx e^ (expand-lam #'e sc))
    #`(lam-λ (x^) e^)])
 
@@ -53,9 +53,8 @@
 (define-syntax (lam stx)
   (syntax-parse stx
     [(_ e)
-     (capture-disappeared
-      (lambda ()
-        (def/stx e^ (expand-lam #'e))
-        #'(quote e^)))]))
+     (with-disappeared-uses-and-bindings
+       (def/stx e^ (expand-lam #'e))
+       #'(quote e^))]))
 
 (lam (lam-λ (x) (lam-ref x)))
