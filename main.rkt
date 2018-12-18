@@ -1,14 +1,13 @@
 #lang racket/base
 
 (require
-  syntax/parse
   syntax/apply-transformer
   racket/syntax
   (for-syntax
    racket/base
    syntax/parse
-   syntax/transformer
-   racket/syntax)
+   racket/syntax
+   syntax/transformer)
   (for-template racket/base))
 
 (provide 
@@ -28,7 +27,7 @@
  
  define-syntax-generic
  generics
- syntax-generic-prop
+ (for-syntax syntax-generic-info-prop)
  )
 
 ; racket/syntax currently has tools for disappeared uses,
@@ -68,7 +67,8 @@
       (with-disappeared-bindings
           body-expr ... stx-expr)))
 
-; Higher-level APIs for scope and binding
+; Higher-level APIs for scope and binding. Not sure where these should
+; live, ultimately.
 
 (struct scope [defctx introducers])
 
@@ -171,7 +171,8 @@
      defctx))
   (scope defctx '()))
 
-; Apply as transformer
+; Apply as transformer. Perhaps should eventually be added to
+; syntax/apply-transformer?
 
 (struct wrapper (contents))
 
@@ -214,7 +215,14 @@
   
   (apply values (map unwrap (syntax->list res))))
 
-; Syntax generics
+; Syntax generics. eventually syntax/generic?
+
+(begin-for-syntax
+  (struct syntax-generic-info [prop func]
+    #:property prop:procedure
+    (lambda (s stx)
+      ((set!-transformer-procedure
+        (make-variable-like-transformer (syntax-generic-info-func s))) stx))))
 
 (define (get-procedure prop-pred prop-ref stx-arg sc)
   (define head
@@ -227,60 +235,66 @@
          (and (prop-pred v)
               ((prop-ref v) v)))))
 
-; The predicate may need an extended local context for syntax-local-value
-(define ((make-predicate prop-pred prop-ref) stx-arg [sc #f])
-  (if (get-procedure prop-pred prop-ref stx-arg sc) #t #f))
+(define (make-predicate name prop-pred prop-ref)
+  (lambda (stx-arg [sc #f]) ; sc for access to bindings in a local context
+    (unless (syntax? stx-arg)
+      (raise-argument-error
+       name
+       "syntax?"
+       stx-arg))
+    (unless (or (eq? sc #f) (scope? sc))
+      (raise-argument-error
+       name
+       "(or/c scope? #f)"
+       sc))
+    (if (get-procedure prop-pred prop-ref stx-arg sc) #t #f)))
 
-(define ((make-dispatch gen-name prop-pred prop-ref fallback) stx-arg . args)
-  (define f
-    (or (get-procedure prop-pred prop-ref stx-arg #f)
-        fallback))
-  (apply f stx-arg args))
-
-(begin-for-syntax
-  (struct generic-info (prop func)
-    #:property prop:procedure
-    (lambda (s stx)
-      ((set!-transformer-procedure
-        (make-variable-like-transformer (generic-info-func s))) stx))))
+; Doesn't take a scope, because we assume this is used with apply-as-transformer.
+; TODO: bake in apply-as-transformer?
+(define (make-dispatch gen-name prop-pred prop-ref fallback)
+  (lambda (stx-arg . args)
+    (unless (syntax? stx-arg)
+      (raise-argument-error
+       gen-name
+       "syntax?"
+       stx-arg))
+    (apply (or (get-procedure prop-pred prop-ref stx-arg #f)
+               fallback)
+           stx-arg args)))
   
 (define-syntax define-syntax-generic
   (syntax-parser
-    [(_ name:id
+    [(_ gen-name:id
         fallback-proc:expr)
-     (define/syntax-parse gen-pred (format-id #'name "~a?" #'name))
-     #'(begin
-         (define-values (prop pred ref) (make-struct-type-property 'name))
-         (define func (make-dispatch 'name pred ref fallback-proc))
-         (define gen-pred (make-predicate pred ref))
-         (define-syntax name (generic-info #'prop #'func)))]))
-
-(define-syntax syntax-generic-prop
-  (syntax-parser
-    [(_ gen-name)
-     (define (error)
-       (raise-syntax-error
-        #f
-        "expected reference to syntax generic"
-        this-syntax))
-     (let ([v (syntax-local-value
-               #'gen-name
-               error)])
-       (or (and (generic-info? v) (generic-info-prop v))
-           (error)))]))
+     (with-syntax ([gen-name? (format-id #'gen-name "~a?" #'gen-name)])
+       #'(begin
+           (define-values (prop pred ref) (make-struct-type-property 'gen-name))
+           (define func (make-dispatch 'gen-name pred ref fallback-proc))
+           (define gen-name? (make-predicate 'gen-name? pred ref))
+           (define-syntax gen-name (syntax-generic-info #'prop #'func))))]))
 
 (define (not-an-expression stx)
   (raise-syntax-error #f "not an expression" stx))
 
 (define-syntax generics
   (syntax-parser
-    [(_ (~alt (~optional [(~literal expand) expander] #:defaults ([expander #'not-an-expression]))
+    [(_ (~alt (~optional [(~literal expand) expander]
+                         #:defaults ([expander #'not-an-expression]))
               [gen:id func:expr]) ...)
-     #'(let ()
-         (struct s ()
-           #:property prop:procedure (lambda (s stx) (expander stx))
-           (~@ #:property (syntax-generic-prop gen) (lambda (st) func)) ...)
-         (s))]))
-
-
+     (define (get-prop gen-id)
+       (define (error)
+         (raise-syntax-error
+          #f
+          "expected reference to syntax generic"
+          this-syntax
+          gen-id))
+       (let ([v (syntax-local-value gen-id error)])
+         (or (and (syntax-generic-info? v) (syntax-generic-info-prop v))
+             (error))))
+     (with-syntax ([(gen-prop ...) (map get-prop (syntax->list #'(gen ...)))])
+       #'(let ()
+           (struct s []
+             #:property prop:procedure (lambda (s stx) (expander stx))
+             (~@ #:property gen-prop (lambda (st) func)) ...)
+           (s)))]))
 
