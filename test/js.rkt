@@ -45,9 +45,9 @@
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx ctx)
-         (js-expand-expression (apply-as-transformer js-transformer 'expression ctx stx) ctx)]
+         (js-expand-expression (apply-as-transformer js-transformer ctx stx) ctx)]
       [_ #:when (js-core-expression? stx ctx)
-         (apply-as-transformer js-core-expression 'expression ctx stx)]
+         (apply-as-transformer js-core-expression ctx stx)]
       [_ #:when (js-core-statement-pass1? stx ctx)
          (raise-syntax-error #f "js statement not valid in js expression position" stx)]
 
@@ -69,20 +69,20 @@
   (define (js-expand-statement-pass1 stx ctx)    
     (syntax-parse stx
       [_ #:when (js-transformer? stx ctx)
-         (js-expand-statement-pass1 (apply-as-transformer js-transformer (list ctx) ctx stx) ctx)]
+         (js-expand-statement-pass1 (apply-as-transformer js-transformer ctx stx) ctx)]
       [_ #:when (js-core-statement-pass1? stx)
-         (apply-as-transformer js-core-statement-pass1 (list ctx) ctx stx ctx)]
+         (apply-as-transformer js-core-statement-pass1 ctx stx ctx)]
       ; Assume it's an expression; we'll expand those in pass 2.
       [_ stx]))
 
   (define (js-expand-statement-pass2 stx ctx)
     (syntax-parse stx
       [_ #:when (js-core-statement-pass2? stx ctx)
-         (apply-as-transformer js-core-statement-pass2 (list ctx) ctx stx)]
+         (apply-as-transformer js-core-statement-pass2 ctx stx)]
       [_ (js-expand-expression stx ctx)]))
 
   (define (expand-block body parent-sc)
-    (define sc (make-scope parent-sc))
+    (define sc (make-definition-scope parent-sc))
     (define body^
       (for/list ([b (syntax->list body)])
         (js-expand-statement-pass1 b sc)))
@@ -165,7 +165,7 @@
 
 (define-syntax/generics (function (x:id ...) body ...)
   [(js-core-expression)
-   (define sc (make-scope))
+   (define sc (make-expression-scope))
    (def/stx (x^ ...)
      (for/list ([x (syntax->list #'(x ...))])
        (bind-var! x sc)))
@@ -249,9 +249,8 @@
 (define-syntax/generics (while condition body ...)
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
-   (define sc (make-scope))
    #`(while #,(js-expand-expression #'condition #f)
-            #,@(expand-block #'(body ...) sc))]
+            #,@(expand-block #'(body ...) #f))]
   [(extract-js-statement idmap)
    (hasheq
     'type "WhileStatement"
@@ -262,8 +261,8 @@
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
    #`(if #,(js-expand-expression #'c #f)
-         #,(expand-block #'(b1 ...) (make-scope))
-         #,(expand-block #'(b2 ...) (make-scope)))]
+         #,(expand-block #'(b1 ...) #f)
+         #,(expand-block #'(b2 ...) #f))]
   [(extract-js-statement idmap)
    (hasheq
     'type "IfStatement"

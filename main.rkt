@@ -18,7 +18,8 @@
  racket-variable
 
  scope?
- make-scope
+ make-expression-scope
+ make-definition-scope
  defctx->scope
  scope-bind!
  scope-lookup
@@ -70,12 +71,17 @@
 ; Higher-level APIs for scope and binding. Not sure where these should
 ; live, ultimately.
 
-(struct scope [defctx introducers])
+(struct scope [defctx introducers definition-scope?])
 
-(define (make-scope [parent #f])
+(define (make-expression-scope [parent #f])
+  (make-scope 'make-expression-scope #f parent))
+(define (make-definition-scope [parent #f])
+  (make-scope 'make-definition-scope #t parent))
+
+(define (make-scope fn-name definition-scope? parent)
   (unless (or (eq? #f parent) (scope? parent))
     (raise-argument-error
-     'make-scope
+     fn-name
      "(or/c scope? #f)"
      parent))
   (scope (if parent
@@ -84,7 +90,8 @@
          (cons (make-syntax-introducer #t)
                (if parent
                    (scope-introducers parent)
-                   '()))))
+                   '()))
+         definition-scope?))
 
 (define (in-scope sc stx)
   (if sc
@@ -138,10 +145,10 @@
   result)
 
 (define (scope-bind! sc id rhs)
-  (unless (or (eq? #f sc) (scope? sc))
+  (unless (scope? sc)
     (raise-argument-error
      'scope-bind!
-     "(or/c scope? #f)"
+     "scope?"
      sc))
   (unless (identifier? id)
     (raise-argument-error
@@ -149,7 +156,7 @@
      "identifier?"
      id))
   
-  (define id-in-sc (in-scope sc id))
+  (define id-in-sc (syntax-local-identifier-as-binding (in-scope sc id)))
   
   (syntax-local-bind-syntaxes
    (list id-in-sc)
@@ -157,19 +164,24 @@
      [(syntax? rhs) rhs]
      [(eq? racket-variable rhs) #f]
      [else (datum->syntax (quote-syntax here) (list 'quote rhs))])
-   (and sc (scope-defctx sc)))
+   (scope-defctx sc))
   
   (record-disappeared-bindings id-in-sc)
   
   id-in-sc)
 
-(define (defctx->scope defctx)
+(define (defctx->scope defctx definition-scope?)
   (unless (internal-definition-context? defctx)
     (raise-argument-error
      'defctx->scope
      "internal-definition-context?"
      defctx))
-  (scope defctx '()))
+  (unless (boolean? definition-scope?)
+    (raise-argument-error
+     'defctx->scope
+     "boolean?"
+     definition-scope?))
+  (scope defctx '() definition-scope?))
 
 ; Apply as transformer. Perhaps should eventually be added to
 ; syntax/apply-transformer?
@@ -189,7 +201,7 @@
             arg))
       arg))
 
-(define (apply-as-transformer f ctx-type sc . args)
+(define (apply-as-transformer f sc . args)
   (unless (procedure? f)
     (raise-argument-error
      'apply-as-transformer
@@ -210,7 +222,11 @@
     (local-apply-transformer
      single-argument-transformer
      (in-scope sc (datum->syntax #f (map wrap args)))
-     ctx-type
+     (if sc
+         (if (scope-definition-scope? sc)
+             (list (scope-defctx sc))
+             'expression)
+         (syntax-local-context))
      (if sc (list (scope-defctx sc)) '())))
   
   (apply values (map unwrap (syntax->list res))))

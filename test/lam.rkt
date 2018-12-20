@@ -28,7 +28,7 @@
   (define (expand-lam stx [sc #f])
     (cond
       [(lam-core? stx)
-       (apply-as-transformer lam-core 'expression sc stx)]
+       (apply-as-transformer lam-core sc stx)]
       [else (raise-syntax-error 'lam "not a lambda calculus expression" stx)])))
 
 (define-syntax/generics (lam-ref x:id)
@@ -39,7 +39,7 @@
 
 (define-syntax/generics (lam-λ (x:id) e)
   [(lam-core)
-   (define sc (make-scope))
+   (define sc (make-expression-scope))
    (def/stx x^ (scope-bind! sc #'x lam-var-binding))
    (def/stx e^ (expand-lam #'e sc))
    #`(lam-λ (x^) e^)])
