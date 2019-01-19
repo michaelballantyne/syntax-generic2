@@ -8,7 +8,6 @@
   syntax-generic2/define
   (for-syntax
    racket/base
-   racket/pretty
    syntax-generic2
    syntax/stx
    syntax/id-table
@@ -18,24 +17,16 @@
   ; Not sure if this is a good idea, but I'm hoping it will give me
   ; better error messages without being verbose.
   
-  (define-syntax-rule (syntax stx) (syntax/loc this-syntax stx))
-  (define-syntax-rule (quasisyntax stx) (quasisyntax/loc this-syntax stx))
+  #;(define-syntax-rule (syntax stx) (syntax/loc this-syntax stx))
+  #;(define-syntax-rule (quasisyntax stx) (quasisyntax/loc this-syntax stx))
 
   ; Expansion
-
-  (define ((expand-to-error message) stx . rest)
-    (raise-syntax-error #f message stx))
   
-  (define-syntax-generic js-core-expression
-    (expand-to-error "not a js core expression"))
-  (define-syntax-generic js-core-statement-pass1
-    (expand-to-error "not a js core statement"))
-  (define-syntax-generic js-core-statement-pass2
-    (expand-to-error "not a js core statement"))
-  (define-syntax-generic js-variable
-    (expand-to-error "not a js variable"))
-  (define-syntax-generic js-transformer
-    (expand-to-error "not a js form"))
+  (define-syntax-generic js-core-expression)
+  (define-syntax-generic js-core-statement-pass1)
+  (define-syntax-generic js-core-statement-pass2)
+  (define-syntax-generic js-variable)
+  (define-syntax-generic js-transformer)
 
   (define (bind-var! name sc)
     (scope-bind! sc name
@@ -55,13 +46,13 @@
       [x:id
        #:when (js-variable? stx ctx)
        (with-syntax ([var (datum->syntax stx '#%js-var)])
-         (js-expand-expression #'(var x) ctx))]
+         (js-expand-expression (qstx/rc (var x)) ctx))]
       [n:number
        (with-syntax ([datum (datum->syntax stx '#%js-datum)])
-         (js-expand-expression #'(datum n) ctx))]
+         (js-expand-expression (qstx/rc (datum n)) ctx))]
       [(e ...)
        (with-syntax ([app (datum->syntax stx '#%js-app)])
-         (js-expand-expression #'(app e ...) ctx))]
+         (js-expand-expression (qstx/rc (app e ...)) ctx))]
       
       [else
        (raise-syntax-error #f "not a js expression" stx)]))
@@ -91,8 +82,7 @@
 
   ; Compilation to JS
   
-  (define-syntax-generic extract-js-expression
-    (expand-to-error "form does not support compilation to JS"))
+  (define-syntax-generic extract-js-expression)
   (define-syntax-generic extract-js-statement
     (lambda (stx idmap)
       ; If it didn't match as a statement, it should be an expression
@@ -143,8 +133,9 @@
 
 (define-syntax/generics (#%js-app e e* ...)
   [(js-core-expression)
-   #`(#%js-app #,(js-expand-expression #'e #f)
-               #,@(stx-map (lambda (stx) (js-expand-expression stx #f)) #'(e* ...)))]
+   (qstx/rc (#%js-app #,(js-expand-expression #'e #f)
+                      #,@(stx-map (lambda (stx) (js-expand-expression stx #f))
+                                  #'(e* ...))))]
   [(extract-js-expression idmap)
    (hasheq
     'type "CallExpression"
@@ -153,9 +144,9 @@
 
 (define-syntax/generics (? c e1 e2)
   [(js-core-expression)
-   #`(? #,(js-expand-expression #'c #f)
-        #,(js-expand-expression #'e1 #f)
-        #,(js-expand-expression #'e2 #f))]
+   (qstx/rc (? #,(js-expand-expression #'c #f)
+               #,(js-expand-expression #'e1 #f)
+               #,(js-expand-expression #'e2 #f)))]
   [(extract-js-expression idmap)
    (hasheq
     'type "ConditionalExpression"
@@ -181,7 +172,7 @@
 (define-syntax/generics (set! var:id e)
   [(js-core-expression)
    #:fail-unless (js-variable? #'var) (format "expected variable")
-   #`(set! var #,(js-expand-expression #'e #f))]
+   (qstx/rc (set! var #,(js-expand-expression #'e #f)))]
   [(extract-js-expression idmap)
    (hasheq
     'type "AssignmentExpression"
@@ -193,8 +184,8 @@
   (binop op)
   (define-syntax/generics (op e1 e2)
     [(js-core-expression)
-     #`(op #,(js-expand-expression #'e1 #f)
-           #,(js-expand-expression #'e2 #f))]
+     (qstx/rc (op #,(js-expand-expression #'e1 #f)
+                  #,(js-expand-expression #'e2 #f)))]
     [(extract-js-expression idmap)
      (hasheq
       'type "BinaryExpression"
@@ -216,9 +207,9 @@
 
 (define-syntax/generics (let x:id e)
   [(js-core-statement-pass1 ctx)   
-   #`(let #,(bind-var! #'x ctx) e)]
+   (qstx/rc (let #,(bind-var! #'x ctx) e))]
   [(js-core-statement-pass2)
-   #`(let x #,(js-expand-expression #'e #f))]
+   (qstx/rc (let x #,(js-expand-expression #'e #f)))]
   [(extract-js-statement idmap)
    (hasheq
     'type "VariableDeclaration"
@@ -240,7 +231,7 @@
 (define-syntax/generics (return e)
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
-   #`(return #,(js-expand-expression #'e #f))]
+   (qstx/rc (return #,(js-expand-expression #'e #f)))]
   [(extract-js-statement idmap)
    (hasheq
     'type "ReturnStatement"
@@ -249,8 +240,8 @@
 (define-syntax/generics (while condition body ...)
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
-   #`(while #,(js-expand-expression #'condition #f)
-            #,@(expand-block #'(body ...) #f))]
+   (qstx/rc (while #,(js-expand-expression #'condition #f)
+                   #,@(expand-block #'(body ...) #f)))]
   [(extract-js-statement idmap)
    (hasheq
     'type "WhileStatement"
@@ -260,9 +251,9 @@
 (define-syntax/generics (if c (b1 ...) (b2 ...))
   [(js-core-statement-pass1 ctx) this-syntax]
   [(js-core-statement-pass2)
-   #`(if #,(js-expand-expression #'c #f)
-         #,(expand-block #'(b1 ...) #f)
-         #,(expand-block #'(b2 ...) #f))]
+   (qstx/rc (if #,(js-expand-expression #'c #f)
+                #,(expand-block #'(b1 ...) #f)
+                #,(expand-block #'(b2 ...) #f)))]
   [(extract-js-statement idmap)
    (hasheq
     'type "IfStatement"
@@ -286,12 +277,12 @@
   (syntax-parser
     [(_ arg)
      (with-disappeared-uses-and-bindings
-       (def/stx expanded-js (js-expand-expression #'arg #f))
-       (def/stx extracted (extract-js-expression #'expanded-js (make-idmap)))
-       #'(begin
-           (define wrapped (hash 'type "ExpressionStatement" 'expression 'extracted))
-           ;(pretty-display wrapped)
-           (runjs wrapped)))]))
+      (def/stx expanded-js (js-expand-expression #'arg #f))
+      (def/stx extracted (extract-js-expression #'expanded-js (make-idmap)))
+      #'(begin
+          (define wrapped (hash 'type "ExpressionStatement" 'expression 'extracted))
+          ;(pretty-display wrapped)
+          (runjs wrapped)))]))
 
 ; Finally, some macros! These ones defined outside the language.
 

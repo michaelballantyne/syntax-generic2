@@ -3,6 +3,7 @@
 (require
   syntax/apply-transformer
   racket/syntax
+  (only-in syntax/parse this-syntax)
   (for-syntax
    racket/base
    syntax/parse
@@ -10,7 +11,9 @@
    syntax/transformer)
   (for-template racket/base))
 
-(provide 
+(provide
+ qstx/rc
+ 
  with-disappeared-uses-and-bindings
  record-disappeared-bindings
  
@@ -30,6 +33,13 @@
  generics
  (for-syntax syntax-generic-info-prop)
  )
+
+(define-syntax (qstx/rc stx)
+  (syntax-case stx ()
+    [(_ template)
+     #`(datum->syntax (quote-syntax #,stx)
+                      (syntax-e (quasisyntax template))
+                      this-syntax this-syntax)]))
 
 ; racket/syntax currently has tools for disappeared uses,
 ; but not disappeared bindings. This is a copy-paste-and-modify job
@@ -65,8 +75,8 @@
 
 (define-syntax-rule (with-disappeared-uses-and-bindings body-expr ... stx-expr)
   (with-disappeared-uses
-      (with-disappeared-bindings
-          body-expr ... stx-expr)))
+   (with-disappeared-bindings
+    body-expr ... stx-expr)))
 
 ; Higher-level APIs for scope and binding. Not sure where these should
 ; live, ultimately.
@@ -277,7 +287,11 @@
     (apply (or (get-procedure prop-pred prop-ref stx-arg #f)
                fallback)
            stx-arg args)))
-  
+
+
+(define ((expand-to-error name) stx . rest)
+  (raise-syntax-error #f (format "not a ~a" name) stx))
+
 (define-syntax define-syntax-generic
   (syntax-parser
     [(_ gen-name:id
@@ -287,7 +301,10 @@
            (define-values (prop pred ref) (make-struct-type-property 'gen-name))
            (define func (make-dispatch 'gen-name pred ref fallback-proc))
            (define gen-name? (make-predicate 'gen-name? pred ref))
-           (define-syntax gen-name (syntax-generic-info #'prop #'func))))]))
+           (define-syntax gen-name (syntax-generic-info #'prop #'func))))]
+    [(_ gen-name:id)
+     #'(define-syntax-generic gen-name
+         (expand-to-error 'gen-name))]))
 
 (define (not-an-expression stx)
   (raise-syntax-error #f "not an expression" stx))
