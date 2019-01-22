@@ -5,6 +5,7 @@
   (prefix-in mk: minikanren)
   (rename-in racket/base [quote mk:quote] [#%app mk:app])
   (for-syntax
+   racket/syntax
    syntax-generic2
    racket/base
    (rename-in syntax/parse [define/syntax-parse def/stx])
@@ -15,7 +16,8 @@
          == #%term-datum #%lv-ref (rename-out [new-quote quote] [new-cons cons])
          absento symbolo numbero =/=
          fresh conde #%rel-app
-         quasiquote unquote)
+         quasiquote unquote
+         matche)
 
 ; term and goal nonterminals. To start we'll just have core forms.
 
@@ -309,6 +311,89 @@
          [(~or* v:identifier v:number)
           #'(new-quote v)]
          [() #'(new-quote ())]))]))
+
+(define-goal-macro matche
+  (lambda (stx)    
+    (syntax-case stx ()
+      [(matche (v ...) ([pat ...] g ...) ...)
+       (let ()
+         (define remove-duplicates
+           (lambda (ls eq-pred)
+             (cond
+               [(null? ls) '()]
+               [(memf (lambda (x) (eq-pred (car ls) x)) (cdr ls))
+                (remove-duplicates (cdr ls) eq-pred)]
+               [else (cons (car ls) (remove-duplicates (cdr ls) eq-pred))])))
+         (define parse-pattern
+           (lambda (args pat)
+             (syntax-case #`(#,args #,pat) ()
+               [(() ()) #'(() () ())]
+               [((a args ...) [p pat ...])
+                (with-syntax ([(p^ (c ...) (x ...))
+                               (parse-patterns-for-arg #'a #'p)])
+                  (with-syntax ([([pat^ ...] (c^ ...) (x^ ...))
+                                 (parse-pattern #'(args ...) #'[pat ...])])
+                    #'([p^ pat^ ...] (c ... c^ ...) (x ... x^ ...))))]
+               [x (error 'parse-pattern "bad syntax ~s ~s" args pat)])))
+         (define parse-patterns-for-arg
+           (lambda (v pat)
+             (define loop
+               (lambda (pat)
+                 (syntax-case pat (unquote ?? ?) ; ?? is the new _, since _ isn't legal in R6
+                   [(unquote ??)
+                    (with-syntax ([_new (generate-temporary #'?_)])
+                      #'((unquote _new) () (_new)))]
+                   [(unquote x)
+                    (when (free-identifier=? #'x v)
+                      (error 'matche "argument ~s appears in pattern at an invalid depth"
+                             (syntax->datum #'x)))
+                    #'((unquote x) () (x))]
+                   [(unquote (? c x))
+                    (when (free-identifier=? #'x v)
+                      (error 'matche "argument ~s appears in pattern at an invalid depth"
+                             (syntax->datum #'x)))
+                    #'((unquote x) ((c x)) (x))]
+                   [(a . d)
+                    (with-syntax ([((pat1 (c1 ...) (x1 ...))
+                                    (pat2 (c2 ...) (x2 ...)))
+                                   (map loop (syntax->list #'(a d)))])
+                      #'((pat1 . pat2) (c1 ... c2 ...) (x1 ... x2 ...)))]
+                   [x #'(x () ())])))
+             (syntax-case pat (unquote ?)
+               [(unquote u)
+                (cond
+                  [(and (identifier? #'u)
+                        (free-identifier=? v #'u))
+                   #'((unquote u) () ())]
+                  [else (loop pat)])]
+               [(unquote (? c u))
+                (cond
+                  [(and (identifier? #'u)
+                        (free-identifier=? v #'u))
+                   #'((unquote u) ((c x)) ())]
+                  [else (loop pat)])]
+               [else (loop pat)])))
+         (unless
+             (andmap (lambda (y) (= (length (syntax->datum #'(v ...))) (length y)))
+                     (syntax->datum #'([pat ...] ...)))
+           (error 'matche "pattern wrong length blah"))
+         (with-syntax ([(([pat^ ...] (c ...) (x ...)) ...)
+                        (map (lambda (y) (parse-pattern #'(v ...) y))
+                             (syntax->list #'([pat ...] ...)))])
+           (with-syntax ([((x^ ...) ...)
+                          (map (lambda (ls)
+                                 (remove-duplicates (syntax->list ls) free-identifier=?))
+                               (syntax->list #'((x ...) ...)))])
+             (with-syntax ([body
+                            #'(conde
+                                [(fresh (x^ ...) c ... (== `[pat^ ...] ls) g ...)]
+                                ...)])
+               #'(fresh (ls)
+                   (== ls `(,v ...))
+                   body)
+               #;#'(let ([ls (list v ...)]) body)))))]
+      [(matche v (pat g ...) ...)
+       #'(matche (v) ([pat] g ...) ...)])))
 
 ; Next step: structures and algebraic data types. May want to leave s-expressions in as a built-in
 ; type to allow interpreters that want to accept s-expression syntax or produce s-expression values.
