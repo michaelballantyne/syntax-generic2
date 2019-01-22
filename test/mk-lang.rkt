@@ -13,6 +13,7 @@
 
 (provide define-relation run
          == #%term-datum #%lv-ref (rename-out [new-quote quote] [new-cons cons])
+         absento symbolo numbero =/=
          fresh conde #%rel-app
          quasiquote unquote)
 
@@ -162,11 +163,45 @@
   [(core-goal)
    (def/stx t1^ (expand-term #'t1 #f))
    (def/stx t2^ (expand-term #'t2 #f))
-   (syntax/loc this-syntax (== t1^ t2^))]
+   (qstx/rc (== t1^ t2^))]
   [(core-goal-compile)
    (def/stx t1^ (compile-term #'t1))
    (def/stx t2^ (compile-term #'t2))
    #'(mk:== t1^ t2^)])
+
+(define-syntax/generics (=/= t1 t2)
+  [(core-goal)
+   (def/stx t1^ (expand-term #'t1 #f))
+   (def/stx t2^ (expand-term #'t2 #f))
+   (qstx/rc (=/= t1^ t2^))]
+  [(core-goal-compile)
+   (def/stx t1^ (compile-term #'t1))
+   (def/stx t2^ (compile-term #'t2))
+   #'(mk:=/= t1^ t2^)])
+
+(define-syntax/generics (symbolo t)
+  [(core-goal)
+   (def/stx t^ (expand-term #'t #f))
+   (qstx/rc (symbolo t^))]
+  [(core-goal-compile)
+   (def/stx t^ (compile-term #'t))
+   #'(mk:symbolo t^)])
+
+(define-syntax/generics (numbero t)
+  [(core-goal)
+   (def/stx t^ (expand-term #'t #f))
+   (qstx/rc (numbero t^))]
+  [(core-goal-compile)
+   (def/stx t^ (compile-term #'t))
+   #'(mk:numbero t^)])
+
+(define-syntax/generics (absento ((~literal new-quote) (~and v (~or* () _:number :identifier))) t)
+  [(core-goal)
+   (def/stx t^ (expand-term #'t #f))
+   (qstx/rc (absento (new-quote v) t^))]
+  [(core-goal-compile)
+   (def/stx t^ (compile-term #'t))
+   #'(mk:absento (quote v) t^)])
 
 (define-syntax/generics (#%rel-app n t ...)
   [(core-goal)
