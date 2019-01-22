@@ -1,10 +1,12 @@
 #lang racket/base
 
 (require "mk-lang.rkt")
-;(require minikanren)
-;(define-syntax-rule (define-relation (n v ...) g) (define (n v ...) g))
 
-#;(define-relation (appendo l1 l2 l3)
+;(require minikanren)
+;(require minikanren/matche)
+;(define-syntax-rule (define-relation (n v ...) g ...) (define (n v ...) g ...))
+
+(define-relation (appendo l1 l2 l3)
   (conde
    [(== l1 '()) (== l3 l2)]  ; base case
    [(fresh (head rest result) ; recursive case
@@ -12,10 +14,10 @@
       (== `(,head . ,result) l3)
       (appendo rest l2 result))]))
 
-(define-relation (appendo l1 l2 l3)
+(define-relation (appendo2 l1 l2 l3)
   (matche [l1 l3]
     [[() ,_] (== l3 l2)]
-    [[(,head . ,rest) (,head . ,result)] (appendo rest l2 result)]))
+    [[(,head . ,rest) (,head . ,result)] (appendo2 rest l2 result)]))
 
 (define-relation (eval-expo exp env val)
   (conde
@@ -67,5 +69,6 @@
      ((=/= y x) (lookupo x rest t)))))
 
 (run 1 (q) (appendo '(a b) '(c) q))
+(run 1 (q) (appendo2 '(a b) '(c) q))
 
-(run 10 (q) (eval-expo q '() q))
+(run 1 (q) (eval-expo q '() q))

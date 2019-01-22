@@ -79,7 +79,7 @@
 
 ; run and define-relations are the interface with Racket
 
-(define-syntax run
+(define-syntax run-core
   (syntax-parser
     [(_ n:number (v:id ...) g)
      (with-disappeared-uses-and-bindings
@@ -92,6 +92,11 @@
 
       (def/stx g^^ (compile-goal #'g^))
       #'(mk:run n (v^ ...) g^^))]))
+
+(define-syntax run
+  (syntax-parser
+    [(_ n:number (v:id ...) g g* ...)
+     #'(run-core n (v ...) (conj g g* ...))]))
 
 (define-syntax relation
   (syntax-parser
