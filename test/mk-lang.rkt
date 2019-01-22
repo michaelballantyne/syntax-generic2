@@ -13,7 +13,8 @@
 
 (provide define-relation run
          == #%term-datum #%lv-ref (rename-out [new-quote quote] [new-cons cons])
-         fresh conde #%rel-app)
+         fresh conde #%rel-app
+         quasiquote unquote)
 
 ; term and goal nonterminals. To start we'll just have core forms.
 
@@ -26,11 +27,13 @@
   (define-syntax-generic goal-macro)
   (define-syntax-generic relation-binding)
   (define-syntax-generic logic-var-binding)
+
+  (define logic-var-binding-instance
+    (generics
+     [logic-var-binding (lambda (stx) stx)]))
   
   (define (bind-logic-var! sc name)
-    (scope-bind! sc name
-                 #'(generics
-                    [logic-var-binding (lambda (stx) stx)])))
+    (scope-bind! sc name #'logic-var-binding-instance))
 
   (define (expand-term stx sc)
     (syntax-parse stx
@@ -76,39 +79,44 @@
 (define-syntax run
   (syntax-parser
     [(_ n:number (v:id ...) g)
-     ; Expansion
-     (define sc (make-expression-scope))
-     (def/stx (v^ ...)
-       (for/list ([v (syntax->list #'(v ...))])
-         (bind-logic-var! sc v)))
-     (def/stx g^ (expand-goal #'g sc))
+     (with-disappeared-uses-and-bindings
+      ; Expansion
+      (define sc (make-expression-scope))
+      (def/stx (v^ ...)
+        (for/list ([v (syntax->list #'(v ...))])
+          (bind-logic-var! sc v)))
+      (def/stx g^ (expand-goal #'g sc))
 
-     (def/stx g^^ (compile-goal #'g^))
-     #'(mk:run n (v^ ...) g^^)]))
+      (def/stx g^^ (compile-goal #'g^))
+      #'(mk:run n (v^ ...) g^^))]))
 
 (define-syntax relation
   (syntax-parser
     [(_ (v:id ...) g)
-     ; Expand
-     (define sc (make-expression-scope))
-     (def/stx (v^ ...)
-       (for/list ([v (syntax->list #'(v ...))])
-         (bind-logic-var! sc v)))
-     (def/stx g^ (expand-goal #'g sc))
+     (with-disappeared-uses-and-bindings
+      ; Expand
+      (define sc (make-expression-scope))
+      (def/stx (v^ ...)
+        (for/list ([v (syntax->list #'(v ...))])
+          (bind-logic-var! sc v)))
+      (def/stx g^ (expand-goal #'g sc))
 
-     ; Compile
-     (def/stx g^^ (compile-goal #'g^))
-     #'(lambda (v^ ...)
-         g^^)]))
+      ; Compile
+      (def/stx g^^ (compile-goal #'g^))
+      #'(lambda (v^ ...)
+          g^^))]))
+
+(begin-for-syntax
+  (define (relation-binding-instance n)
+    (generics
+     [relation-binding (lambda (_) n)])))
 
 (define-syntax define-relation
   (syntax-parser 
     [(_ (name:id v:id ...) g)
      #`(begin
          ; Bind static information for expansion
-         (define-syntax name
-           (generics
-            [relation-binding (lambda (_) (quote #,(length (syntax->list #'(v ...)))))]))
+         (define-syntax name (relation-binding-instance #,(length (syntax->list #'(v ...)))))
          ; Create mapping from source relation name to compiled function name
          (begin-for-syntax
            (free-id-table-set! relation-impl #'name #'tmp))
@@ -218,34 +226,59 @@
    (def/stx g^ (compile-goal #'g))
    #'(mk:fresh (x ...) g^)])
 
-(define-syntax conj
-  (generics
-   [goal-macro
-    (syntax-parser
-      [(conj g)
-       #'g]
-      [(conj g1 g2)
-       #'(conj2 g1 g2)]
-      [(conj g1 g2 g* ...)
-       #'(conj (conj2 g1 g2) g* ...)]
-      )]))
+(define-syntax-rule
+  (define-goal-macro m f)
+  (define-syntax m (generics [goal-macro f])))
 
-(define-syntax fresh
-  (generics
-   [goal-macro
-    (syntax-parser
-      [(fresh (x:id ...)
-         g1 g* ...)
-       #'(fresh1 (x ...)
-                 (conj g1 g* ...))])]))
+(define-syntax-rule
+  (define-term-macro m f)
+  (define-syntax m (generics [term-macro f])))
 
-(define-syntax conde
-  (generics
-   [goal-macro
-    (syntax-parser
-      [(conde [g1 g1* ...])
-       #'(conj g1 g1* ...)]
-      [(conde [g1 g1* ...] [g g* ...] ...)
-       #'(disj2
-          (conj g1 g1* ...)
-          (conde [g g* ...] ...))])]))
+(define-goal-macro conj
+  (syntax-parser
+    [(conj g) #'g]
+    [(conj g1 g2 g* ...) #'(conj (conj2 g1 g2) g* ...)]))
+
+(define-goal-macro fresh
+  (syntax-parser
+    [(fresh (x:id ...)
+       g1 g* ...)
+     #'(fresh1 (x ...)
+               (conj g1 g* ...))]))
+
+(define-goal-macro conde
+  (syntax-parser
+    [(conde [g1 g1* ...])
+     #'(conj g1 g1* ...)]
+    [(conde [g1 g1* ...] [g g* ...] ...)
+     #'(disj2
+        (conj g1 g1* ...)
+        (conde [g g* ...] ...))]))
+
+(define-term-macro unquote
+  (lambda (stx)
+    (raise-syntax-error 'unquote "only valid within quasiquote" stx)))
+
+(define-term-macro quasiquote
+  (syntax-parser 
+    [(_ q)
+     (let rec ([stx #'q])
+       (syntax-parse stx
+         #:literals (unquote)
+         [(unquote e)
+          #'e]
+         [(unquote . rest)
+          (raise-syntax-error 'unquote "bad unquote syntax" stx)]
+         [(a . d)
+          #`(new-cons #,(rec #'a) #,(rec #'d))]
+         [(~or* v:identifier v:number)
+          #'(new-quote v)]
+         [() #'(new-quote ())]))]))
+
+; Next step: structures and algebraic data types. May want to leave s-expressions in as a built-in
+; type to allow interpreters that want to accept s-expression syntax or produce s-expression values.
+;
+;  SExp = (ListOf SExp)
+;       | number
+;       | string
+;       | symbol
