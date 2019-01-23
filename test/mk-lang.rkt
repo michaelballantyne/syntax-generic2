@@ -379,8 +379,7 @@
                                ...)])
                #'(fresh (ls)
                    (== ls `(,v ...))
-                   body)
-               #;#'(let ([ls (list v ...)]) body)))))]
+                   body)))))]
       [(matche v (pat g ...) ...)
        #'(matche (v) ([pat] g ...) ...)])))
 

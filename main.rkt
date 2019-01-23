@@ -251,18 +251,20 @@
       ((set!-transformer-procedure
         (make-variable-like-transformer (syntax-generic-info-func s))) stx))))
 
-(define (get-procedure prop-pred prop-ref stx-arg sc)
-  (define head
-    (syntax-case stx-arg ()
-      [v (identifier? #'v) #'v]
-      [(v . rest) (identifier? #'v) #'v]
-      [_ #f]))
+(define (get-procedure prop-pred prop-ref dispatch-on stx-arg sc)
+  (define head (dispatch-on stx-arg))
   (and head
        (let ([v (scope-lookup sc head)])
          (and (prop-pred v)
               ((prop-ref v) v)))))
 
-(define (make-predicate name prop-pred prop-ref)
+(define (dispatch-on-head stx)
+  (syntax-case stx ()
+    [v (identifier? #'v) #'v]
+    [(v . rest) (identifier? #'v) #'v]
+    [_ #f]))
+
+(define (make-predicate name prop-pred prop-ref dispatch-on)
   (lambda (stx-arg [sc #f]) ; sc for access to bindings in a local context
     (unless (syntax? stx-arg)
       (raise-argument-error
@@ -274,18 +276,18 @@
        name
        "(or/c scope? #f)"
        sc))
-    (if (get-procedure prop-pred prop-ref stx-arg sc) #t #f)))
+    (if (get-procedure prop-pred prop-ref dispatch-on stx-arg sc) #t #f)))
 
 ; Doesn't take a scope, because we assume this is used with apply-as-transformer.
 ; TODO: bake in apply-as-transformer?
-(define (make-dispatch gen-name prop-pred prop-ref fallback)
+(define (make-dispatch gen-name prop-pred prop-ref dispatch-on fallback)
   (lambda (stx-arg . args)
     (unless (syntax? stx-arg)
       (raise-argument-error
        gen-name
        "syntax?"
        stx-arg))
-    (apply (or (get-procedure prop-pred prop-ref stx-arg #f)
+    (apply (or (get-procedure prop-pred prop-ref dispatch-on stx-arg #f)
                fallback)
            stx-arg args)))
 
@@ -296,16 +298,17 @@
 (define-syntax define-syntax-generic
   (syntax-parser
     [(_ gen-name:id
-        fallback-proc:expr)
+        (~optional fallback-proc:expr
+                   #:defaults ([fallback-proc #'(expand-to-error 'gen-name)]))
+        (~optional (~seq #:dispatch-on dispatch-on-e:expr)
+                   #:defaults ([dispatch-on-e #'dispatch-on-head])))
      (with-syntax ([gen-name? (format-id #'gen-name "~a?" #'gen-name)])
        #'(begin
            (define-values (prop pred ref) (make-struct-type-property 'gen-name))
-           (define func (make-dispatch 'gen-name pred ref fallback-proc))
-           (define gen-name? (make-predicate 'gen-name? pred ref))
-           (define-syntax gen-name (syntax-generic-info #'prop #'func))))]
-    [(_ gen-name:id)
-     #'(define-syntax-generic gen-name
-         (expand-to-error 'gen-name))]))
+           (define dispatch-on dispatch-on-e)
+           (define func (make-dispatch 'gen-name pred ref dispatch-on fallback-proc))
+           (define gen-name? (make-predicate 'gen-name? pred ref dispatch-on))
+           (define-syntax gen-name (syntax-generic-info #'prop #'func))))]))
 
 (define (not-an-expression stx)
   (raise-syntax-error #f "not an expression" stx))
@@ -334,4 +337,3 @@
                               (cons gen-prop (lambda (st) func)) ...))])
            (s)))]))
 
-       
