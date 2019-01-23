@@ -4,7 +4,6 @@
   json
   racket/list
   racket/system
-  syntax/parse/define
   syntax-generic2/define
   (for-syntax
    racket/base
@@ -14,12 +13,6 @@
    (rename-in syntax/parse [define/syntax-parse def/stx])))
 
 (begin-for-syntax
-  ; Not sure if this is a good idea, but I'm hoping it will give me
-  ; better error messages without being verbose.
-  
-  #;(define-syntax-rule (syntax stx) (syntax/loc this-syntax stx))
-  #;(define-syntax-rule (quasisyntax stx) (quasisyntax/loc this-syntax stx))
-
   ; Expansion
   
   (define-syntax-generic js-core-expression)
@@ -114,6 +107,7 @@
      'body (stx-map (λ (b) (extract-js-statement b idmap))
                     body))))
 
+
 ; Core expressions
 
 (define-syntax/generics (#%js-var x:id)
@@ -180,28 +174,33 @@
     'left (extract-ref #'var idmap)
     'right (extract-js-expression #'e idmap))])
 
-(define-syntax-rule
-  (binop op)
-  (define-syntax/generics (op e1 e2)
-    [(js-core-expression)
-     (qstx/rc (op #,(js-expand-expression #'e1 #f)
-                  #,(js-expand-expression #'e2 #f)))]
-    [(extract-js-expression idmap)
-     (hasheq
-      'type "BinaryExpression"
-      'operator (symbol->string (syntax->datum #'op))
-      'left (extract-js-expression #'e1 idmap)
-      'right (extract-js-expression #'e2 idmap))]))
+(begin-for-syntax
+  (define binop
+    (generics
+     [js-core-expression
+      (syntax-parser
+        [(op e1 e2)
+         (qstx/rc (op #,(js-expand-expression #'e1 #f)
+                      #,(js-expand-expression #'e2 #f)))])]
+     [extract-js-expression
+      (lambda (stx idmap)
+        (syntax-parse stx
+          [(op e1 e2)
+           (hasheq
+            'type "BinaryExpression"
+            'operator (symbol->string (syntax->datum #'op))
+            'left (extract-js-expression #'e1 idmap)
+            'right (extract-js-expression #'e2 idmap))]))])))
 
-(binop +)
-(binop *)
-(binop -)
-(binop /)
-(binop <)
-(binop <=)
-(binop >)
-(binop >=)
-(binop ==)
+(define-syntax + binop)
+(define-syntax * binop)
+(define-syntax - binop)
+(define-syntax / binop)
+(define-syntax < binop)
+(define-syntax <= binop)
+(define-syntax > binop)
+(define-syntax >= binop)
+(define-syntax == binop)
 
 ; Core statements
 

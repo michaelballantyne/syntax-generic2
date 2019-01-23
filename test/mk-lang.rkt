@@ -38,6 +38,10 @@
   (define (bind-logic-var! sc name)
     (scope-bind! sc name #'logic-var-binding-instance))
 
+  (define (relation-binding-instance n)
+    (generics
+     [relation-binding (lambda (_) n)]))
+
   (define (expand-term stx sc)
     (syntax-parse stx
       [var:id
@@ -46,30 +50,26 @@
       [(~or* l:number l:boolean)
        (with-syntax ([#%term-datum (datum->syntax stx '#%term-datum)])
          (expand-term (qstx/rc (#%term-datum l)) sc))]
-      [_
-       #:when (core-term? stx sc)
-       (apply-as-transformer core-term sc stx)]  ; dispatch to other core term forms
-      [_
-       #:when (term-macro? stx sc)
-       (expand-term (apply-as-transformer term-macro sc stx) sc)]
-      [_
-       (raise-syntax-error #f "bad term syntax" stx)]))
+      [_ #:when (core-term? stx sc)
+         (apply-as-transformer core-term sc stx)]  ; dispatch to other core term forms
+      [_ #:when (term-macro? stx sc)
+         (expand-term (apply-as-transformer term-macro sc stx) sc)]
+      [_ (raise-syntax-error #f "bad term syntax" stx)]))
+  
   (define (expand-goal stx sc)
     (syntax-parse stx
-      [_
-       #:when (core-goal? stx sc)
-       (apply-as-transformer core-goal sc stx)]
-      [_
-       #:when (goal-macro? stx sc)
-       (expand-goal (apply-as-transformer goal-macro sc stx) sc)]
+      [_ #:when (core-goal? stx sc)
+         (apply-as-transformer core-goal sc stx)]
+      [_ #:when (goal-macro? stx sc)
+         (expand-goal (apply-as-transformer goal-macro sc stx) sc)]
       [(n:id t ...) ; if n not bound as goal syntax, interpret as a relation application
        (with-syntax ([#%rel-app (datum->syntax stx '#%rel-app)])
          (expand-goal (qstx/rc (#%rel-app n t ...)) sc))]
-      [_
-       (raise-syntax-error #f "bad goal syntax" stx)]))
+      [_ (raise-syntax-error #f "bad goal syntax" stx)]))
 
   (define (compile-term stx)
     (apply-as-transformer core-term-compile #f stx))
+  
   (define (compile-goal stx)
     (apply-as-transformer core-goal-compile #f stx))
 
@@ -93,11 +93,6 @@
       (def/stx g^^ (compile-goal #'g^))
       #'(mk:run n (v^ ...) g^^))]))
 
-(define-syntax run
-  (syntax-parser
-    [(_ n:number (v:id ...) g g* ...)
-     #'(run-core n (v ...) (conj g g* ...))]))
-
 (define-syntax relation
   (syntax-parser
     [(_ (v:id ...) g)
@@ -113,11 +108,6 @@
       (def/stx g^^ (compile-goal #'g^))
       #'(lambda (v^ ...)
           g^^))]))
-
-(begin-for-syntax
-  (define (relation-binding-instance n)
-    (generics
-     [relation-binding (lambda (_) n)])))
 
 (define-syntax define-relation
   (syntax-parser 
@@ -143,16 +133,12 @@
    #'v])
 
 (define-syntax/generics (#%term-datum l:number)
-  [(core-term)
-   this-syntax]
-  [(core-term-compile)
-   #'(quote l)])
+  [(core-term) this-syntax]
+  [(core-term-compile) #'(quote l)])
 
 (define-syntax/generics (new-quote d)
-  [(core-term)
-   this-syntax]
-  [(core-term-compile)
-   #'(quote d)])
+  [(core-term) this-syntax]
+  [(core-term-compile) #'(quote d)])
 
 (define-syntax/generics (new-cons t1 t2)
   [(core-term)
@@ -166,49 +152,40 @@
 
 ; Goal forms
 
-(define-syntax/generics (== t1 t2)
-  [(core-goal)
-   (def/stx t1^ (expand-term #'t1 #f))
-   (def/stx t2^ (expand-term #'t2 #f))
-   (qstx/rc (== t1^ t2^))]
-  [(core-goal-compile)
-   (def/stx t1^ (compile-term #'t1))
-   (def/stx t2^ (compile-term #'t2))
-   #'(mk:== t1^ t2^)])
+(begin-for-syntax
+  (define (binary-term runtime-op)
+    (generics
+     [core-goal
+      (syntax-parser
+        [(op t1 t2)      
+         (def/stx t1^ (expand-term #'t1 #f))
+         (def/stx t2^ (expand-term #'t2 #f))
+         (qstx/rc (op t1^ t2^))])]
+     [core-goal-compile
+      (syntax-parser
+        [(op t1 t2)
+         (def/stx t1^ (compile-term #'t1))
+         (def/stx t2^ (compile-term #'t2))
+         #`(#,runtime-op t1^ t2^)])]))
 
-(define-syntax/generics (=/= t1 t2)
-  [(core-goal)
-   (def/stx t1^ (expand-term #'t1 #f))
-   (def/stx t2^ (expand-term #'t2 #f))
-   (qstx/rc (=/= t1^ t2^))]
-  [(core-goal-compile)
-   (def/stx t1^ (compile-term #'t1))
-   (def/stx t2^ (compile-term #'t2))
-   #'(mk:=/= t1^ t2^)])
+  (define (unary-term runtime-op)
+    (generics
+     [core-goal
+      (syntax-parser
+        [(op t)      
+         (def/stx t^ (expand-term #'t #f))
+         (qstx/rc (op t^))])]
+     [core-goal-compile
+      (syntax-parser
+        [(op t)
+         (def/stx t^ (compile-term #'t))
+         #`(#,runtime-op t^)])])))
 
-(define-syntax/generics (symbolo t)
-  [(core-goal)
-   (def/stx t^ (expand-term #'t #f))
-   (qstx/rc (symbolo t^))]
-  [(core-goal-compile)
-   (def/stx t^ (compile-term #'t))
-   #'(mk:symbolo t^)])
-
-(define-syntax/generics (numbero t)
-  [(core-goal)
-   (def/stx t^ (expand-term #'t #f))
-   (qstx/rc (numbero t^))]
-  [(core-goal-compile)
-   (def/stx t^ (compile-term #'t))
-   #'(mk:numbero t^)])
-
-(define-syntax/generics (absento ((~literal new-quote) (~and v (~or* () _:number :identifier))) t)
-  [(core-goal)
-   (def/stx t^ (expand-term #'t #f))
-   (qstx/rc (absento (new-quote v) t^))]
-  [(core-goal-compile)
-   (def/stx t^ (compile-term #'t))
-   #'(mk:absento (quote v) t^)])
+(define-syntax == (binary-term #'mk:==))
+(define-syntax =/= (binary-term #'mk:=/=))
+(define-syntax absento (binary-term #'mk:absento))
+(define-syntax symbolo (unary-term #'mk:symbolo))
+(define-syntax numbero (unary-term #'mk:numbero))
 
 (define-syntax/generics (#%rel-app n t ...)
   [(core-goal)
@@ -267,6 +244,13 @@
   [(core-goal-compile)
    (def/stx g^ (compile-goal #'g))
    #'(mk:fresh (x ...) g^)])
+
+; Syntactic sugar
+
+(define-syntax run
+  (syntax-parser
+    [(_ n:number (v:id ...) g g* ...)
+     #'(run-core n (v ...) (conj g g* ...))]))
 
 (define-syntax-rule
   (define-goal-macro m f)
@@ -391,8 +375,8 @@
                                (syntax->list #'((x ...) ...)))])
              (with-syntax ([body
                             #'(conde
-                                [(fresh (x^ ...) c ... (== `[pat^ ...] ls) g ...)]
-                                ...)])
+                               [(fresh (x^ ...) c ... (== `[pat^ ...] ls) g ...)]
+                               ...)])
                #'(fresh (ls)
                    (== ls `(,v ...))
                    body)

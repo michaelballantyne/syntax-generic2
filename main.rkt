@@ -32,6 +32,7 @@
  define-syntax-generic
  generics
  (for-syntax syntax-generic-info-prop)
+
  )
 
 (define-syntax (qstx/rc stx)
@@ -325,9 +326,12 @@
          (or (and (syntax-generic-info? v) (syntax-generic-info-prop v))
              (error))))
      (with-syntax ([(gen-prop ...) (map get-prop (syntax->list #'(gen ...)))])
-       #'(let ()
-           (struct s []
-             #:property prop:procedure (lambda (s stx) (expander stx))
-             (~@ #:property gen-prop (lambda (st) func)) ...)
+       ; Use this instead of the struct macro for faster expansion.
+       #'(let-values ([(s-decl s s? get-s set-s)
+                       (make-struct-type
+                        'anonymous #f 0 0 #f
+                        (list (cons prop:procedure (lambda (s stx) (expander stx)))
+                              (cons gen-prop (lambda (st) func)) ...))])
            (s)))]))
 
+       

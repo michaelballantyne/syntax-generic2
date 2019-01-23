@@ -71,4 +71,4 @@
 (run 1 (q) (appendo '(a b) '(c) q))
 (run 1 (q) (appendo2 '(a b) '(c) q))
 
-(run 1 (q) (eval-expo q '() q))
+#;(run 1 (q) (eval-expo q '() q))

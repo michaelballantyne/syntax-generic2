@@ -5,7 +5,8 @@
   (for-syntax
    racket/base
    syntax-generic2
-   (rename-in syntax/parse [define/syntax-parse def/stx])))
+   syntax/parse
+   (only-in syntax/parse [define/syntax-parse def/stx])))
 
 ; A lambda calculus expander
 
@@ -35,26 +36,26 @@
   [(lam-core)
    (unless (lam-var? #'x)
      (raise-syntax-error 'lam "unbound reference" #'x))
-   #`(lam-ref x)])
+   (qstx/rc (lam-ref x))])
 
 (define-syntax/generics (lam-λ (x:id) e)
   [(lam-core)
    (define sc (make-expression-scope))
    (def/stx x^ (scope-bind! sc #'x lam-var-binding))
    (def/stx e^ (expand-lam #'e sc))
-   #`(lam-λ (x^) e^)])
+   (qstx/rc (lam-λ (x^) e^))])
 
 (define-syntax/generics (lam-app e1 e2)
   [(lam-core)
    (def/stx e1^ (expand-lam #'e1))
    (def/stx e2^ (expand-lam #'e2))
-   #`(lam-app e1^ e2^)])
+   (qstx/rc (lam-app e1^ e2^))])
   
 (define-syntax (lam stx)
   (syntax-parse stx
     [(_ e)
      (with-disappeared-uses-and-bindings
        (def/stx e^ (expand-lam #'e))
-       #'(quote e^))]))
+       (qstx/rc (quote e^)))]))
 
 (lam (lam-λ (x) (lam-ref x)))
