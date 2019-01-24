@@ -3,7 +3,7 @@
 (require
   syntax/apply-transformer
   racket/syntax
-  (only-in syntax/parse this-syntax)
+  syntax/parse
   (for-syntax
    racket/base
    syntax/parse
@@ -33,6 +33,7 @@
  generics
  (for-syntax syntax-generic-info-prop)
 
+ generics/parse
  )
 
 (define-syntax (qstx/rc stx)
@@ -337,3 +338,21 @@
        #'(make-generics-impl (list (cons prop:procedure (lambda (s stx) (expander stx)))
                                    (cons gen-prop (lambda (st) func)) ...)))]))
 
+(define-syntax generics/parse
+  (syntax-parser
+    [(_ (name:id pat ...)
+        [(method:id args:id ...)
+         body body* ...] ...)
+     ; This trick with the syntax class means that all the pattern
+     ; bindings get their hygiene from `name`, rather than their
+     ; original syntax.
+     #:with empty (datum->syntax #'name '||)
+     #'(let ()
+         (define-syntax-class cls
+           (pattern (name pat ...)))
+         (generics
+          [method (lambda (stx args ...)
+                    (syntax-parse stx
+                      [(~var empty cls)
+                       body body* ...]))]
+          ...))]))

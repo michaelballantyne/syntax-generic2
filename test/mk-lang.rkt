@@ -156,32 +156,23 @@
 
 (begin-for-syntax
   (define (binary-term runtime-op)
-    (generics
-     [core-goal
-      (syntax-parser
-        [(op t1 t2)      
-         (def/stx t1^ (expand-term #'t1 #f))
-         (def/stx t2^ (expand-term #'t2 #f))
-         (qstx/rc (op t1^ t2^))])]
-     [core-goal-compile
-      (syntax-parser
-        [(op t1 t2)
-         (def/stx t1^ (compile-term #'t1))
-         (def/stx t2^ (compile-term #'t2))
-         #`(#,runtime-op t1^ t2^)])]))
-
+    (generics/parse (op t1 t2)
+      [(core-goal)
+       (def/stx t1^ (expand-term #'t1 #f))
+       (def/stx t2^ (expand-term #'t2 #f))
+       (qstx/rc (op t1^ t2^))]
+      [(core-goal-compile)
+       (def/stx t1^ (compile-term #'t1))
+       (def/stx t2^ (compile-term #'t2))
+       #`(#,runtime-op t1^ t2^)]))
   (define (unary-term runtime-op)
-    (generics
-     [core-goal
-      (syntax-parser
-        [(op t)      
-         (def/stx t^ (expand-term #'t #f))
-         (qstx/rc (op t^))])]
-     [core-goal-compile
-      (syntax-parser
-        [(op t)
-         (def/stx t^ (compile-term #'t))
-         #`(#,runtime-op t^)])])))
+    (generics/parse (op t)
+      [(core-goal)   
+       (def/stx t^ (expand-term #'t #f))
+       (qstx/rc (op t^))]
+      [(core-goal-compile)
+       (def/stx t^ (compile-term #'t))
+       #`(#,runtime-op t^)])))
 
 (define-syntax == (binary-term #'mk:==))
 (define-syntax =/= (binary-term #'mk:=/=))
