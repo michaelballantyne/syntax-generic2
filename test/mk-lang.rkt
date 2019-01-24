@@ -3,12 +3,14 @@
 (require
   syntax-generic2/define
   (prefix-in mk: minikanren)
-  (rename-in racket/base [quote mk:quote] [#%app mk:app])
+  racket/base
+  (only-in racket/base [quote mk:quote] [#%app mk:app])
   (for-syntax
    racket/syntax
    syntax-generic2
    racket/base
-   (rename-in syntax/parse [define/syntax-parse def/stx])
+   syntax/parse
+   (only-in syntax/parse [define/syntax-parse def/stx])
    syntax/id-table
    ))
 

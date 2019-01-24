@@ -251,46 +251,47 @@
       ((set!-transformer-procedure
         (make-variable-like-transformer (syntax-generic-info-func s))) stx))))
 
-(define (get-procedure prop-pred prop-ref dispatch-on stx-arg sc)
-  (define head (dispatch-on stx-arg))
-  (and head
-       (let ([v (scope-lookup sc head)])
-         (and (prop-pred v)
-              ((prop-ref v) v)))))
-
 (define (dispatch-on-head stx)
   (syntax-case stx ()
     [v (identifier? #'v) #'v]
     [(v . rest) (identifier? #'v) #'v]
     [_ #f]))
 
-(define (make-predicate name prop-pred prop-ref dispatch-on)
-  (lambda (stx-arg [sc #f]) ; sc for access to bindings in a local context
-    (unless (syntax? stx-arg)
-      (raise-argument-error
-       name
-       "syntax?"
-       stx-arg))
-    (unless (or (eq? sc #f) (scope? sc))
-      (raise-argument-error
-       name
-       "(or/c scope? #f)"
-       sc))
-    (if (get-procedure prop-pred prop-ref dispatch-on stx-arg sc) #t #f)))
+(define (make-generic gen-name pred-name dispatch-on fallback-proc)
+  (define-values (prop prop-pred prop-ref) (make-struct-type-property gen-name))
 
-; Doesn't take a scope, because we assume this is used with apply-as-transformer.
-; TODO: bake in apply-as-transformer?
-(define (make-dispatch gen-name prop-pred prop-ref dispatch-on fallback)
-  (lambda (stx-arg . args)
+  (define (get-procedure stx-arg sc)
+    (define head (dispatch-on stx-arg))
+    (and head
+         (let ([v (scope-lookup sc head)])
+           (and (prop-pred v)
+                ((prop-ref v) v)))))
+
+  ; Doesn't take a scope, because we assume this is used with apply-as-transformer.
+  ; TODO: bake in apply-as-transformer?
+  (define (dispatch stx-arg . args)
     (unless (syntax? stx-arg)
       (raise-argument-error
        gen-name
        "syntax?"
        stx-arg))
-    (apply (or (get-procedure prop-pred prop-ref dispatch-on stx-arg #f)
-               fallback)
-           stx-arg args)))
+    (apply (or (get-procedure stx-arg #f) fallback-proc)
+           stx-arg args))
 
+  (define (predicate stx-arg [sc #f]) ; sc for access to bindings in a local context
+    (unless (syntax? stx-arg)
+      (raise-argument-error
+       pred-name
+       "syntax?"
+       stx-arg))
+    (unless (or (eq? sc #f) (scope? sc))
+      (raise-argument-error
+       pred-name
+       "(or/c scope? #f)"
+       sc))
+    (if (get-procedure stx-arg sc) #t #f))
+
+  (values prop dispatch predicate))
 
 (define ((expand-to-error name) stx . rest)
   (raise-syntax-error #f (format "not a ~a" name) stx))
@@ -304,14 +305,17 @@
                    #:defaults ([dispatch-on-e #'dispatch-on-head])))
      (with-syntax ([gen-name? (format-id #'gen-name "~a?" #'gen-name)])
        #'(begin
-           (define-values (prop pred ref) (make-struct-type-property 'gen-name))
-           (define dispatch-on dispatch-on-e)
-           (define func (make-dispatch 'gen-name pred ref dispatch-on fallback-proc))
-           (define gen-name? (make-predicate 'gen-name? pred ref dispatch-on))
-           (define-syntax gen-name (syntax-generic-info #'prop #'func))))]))
+           (define-values (prop func gen-name?)
+             (make-generic 'gen-name 'gen-name? dispatch-on-e fallback-proc))
+           (define-syntax gen-name (syntax-generic-info (quote-syntax prop) (quote-syntax func)))))]))
 
 (define (not-an-expression stx)
   (raise-syntax-error #f "not an expression" stx))
+
+(define (make-generics-impl props)
+  (let-values ([(s-decl s s? get-s set-s)
+                (make-struct-type 'anonymous #f 0 0 #f props)])
+    (s)))
 
 (define-syntax generics
   (syntax-parser
@@ -330,10 +334,6 @@
              (error))))
      (with-syntax ([(gen-prop ...) (map get-prop (syntax->list #'(gen ...)))])
        ; Use this instead of the struct macro for faster expansion.
-       #'(let-values ([(s-decl s s? get-s set-s)
-                       (make-struct-type
-                        'anonymous #f 0 0 #f
-                        (list (cons prop:procedure (lambda (s stx) (expander stx)))
-                              (cons gen-prop (lambda (st) func)) ...))])
-           (s)))]))
+       #'(make-generics-impl (list (cons prop:procedure (lambda (s stx) (expander stx)))
+                                   (cons gen-prop (lambda (st) func)) ...)))]))
 
