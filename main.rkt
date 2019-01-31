@@ -23,7 +23,9 @@
  scope?
  make-expression-scope
  make-definition-scope
+ in-scope
  defctx->scope
+ scope-defctx
  scope-bind!
  scope-lookup
  
