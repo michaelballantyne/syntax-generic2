@@ -322,7 +322,8 @@
   (syntax-parser
     [(_ (~alt (~optional [(~literal expand) expander]
                          #:defaults ([expander #'not-an-expression]))
-              [gen:id func:expr]) ...)
+              [gen:id func:expr]
+              (~seq #:property prop:expr prop-val:expr)) ...)
      (define (get-prop gen-id)
        (define (error)
          (raise-syntax-error
@@ -336,7 +337,8 @@
      (with-syntax ([(gen-prop ...) (map get-prop (syntax->list #'(gen ...)))])
        ; Use this instead of the struct macro for faster expansion.
        #'(make-generics-impl (list (cons prop:procedure (lambda (s stx) (expander stx)))
-                                   (cons gen-prop (lambda (st) func)) ...)))]))
+                                   (cons gen-prop (lambda (st) func)) ...
+                                   (cons prop prop-val) ...)))]))
 
 (define-syntax generics/parse
   (syntax-parser
