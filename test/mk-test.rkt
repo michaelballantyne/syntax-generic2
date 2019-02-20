@@ -16,8 +16,8 @@
 
 (define-relation (appendo2 l1 l2 l3)
   (matche [l1 l3]
-    [[() ,_] (== l3 l2)]
-    [[(,head . ,rest) (,head . ,result)] (appendo2 rest l2 result)]))
+          [[() ,_] (== l3 l2)]
+          [[(,head . ,rest) (,head . ,result)] (appendo2 rest l2 result)]))
 
 (define-relation (eval-expo exp env val)
   (conde
@@ -68,7 +68,18 @@
      ((== y x) (== v t))
      ((=/= y x) (lookupo x rest t)))))
 
-(run 1 (q) (appendo '(a b) '(c) q))
-(run 1 (q) (appendo2 '(a b) '(c) q))
+
+
+(define-relation (appendo3 l1 l2 l3)
+  (conde
+   [(== l1 '()) (== l3 l2)]
+   [(fresh (head rest result)
+      (appendo3 rest l2 result)
+      (== `(,head . ,rest) l1)
+      (== `(,head . ,result) l3))]))
+
+(run 2 (q) (appendo '(a b) '(c) q))
+(run 2 (q) (appendo2 '(a b) '(c) q))
+(run 2 (q) (appendo3 '(a b) '(c) q))
 
 #;(run 1 (q) (eval-expo q '() q))

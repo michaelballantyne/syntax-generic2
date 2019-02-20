@@ -6,6 +6,7 @@
   racket/base
   (only-in racket/base [quote mk:quote] [#%app mk:app])
   (for-syntax
+   racket/pretty
    racket/syntax
    syntax-generic2
    racket/base
@@ -26,23 +27,28 @@
 (begin-for-syntax
   (define-syntax-generic core-term)
   (define-syntax-generic core-goal)
-  (define-syntax-generic core-term-compile)
-  (define-syntax-generic core-goal-compile)
+  (define-syntax-generic compile)
   (define-syntax-generic term-macro)
   (define-syntax-generic goal-macro)
-  (define-syntax-generic relation-binding)
+  (define-syntax-generic relation-binding-argc)
   (define-syntax-generic logic-var-binding)
+  (define-syntax-generic map-transform)
 
-  (define logic-var-binding-instance
+  (define (make-logic-var-binding)
     (generics
+     ; Currently unreachable as there are no Racket subexpressions of mk goals
+     [expand (λ (stx) (raise-syntax-error
+                       #f "logic variables may only be used in miniKanren terms" stx))]
      [logic-var-binding (lambda (stx) stx)]))
   
   (define (bind-logic-var! sc name)
-    (scope-bind! sc name #'logic-var-binding-instance))
+    (scope-bind! sc name #'(make-logic-var-binding)))
 
-  (define (relation-binding-instance n)
+  (define (make-relation-binding n)
     (generics
-     [relation-binding (lambda (_) n)]))
+     [expand (λ (stx) (raise-syntax-error
+                       #f "relations may only be used in the context of a miniKanren goal" stx))]
+     [relation-binding-argc (lambda (_) n)]))
 
   (define (expand-term stx sc)
     (syntax-parse stx
@@ -69,14 +75,50 @@
          (expand-goal (qstx/rc (#%rel-app n t ...)) sc))]
       [_ (raise-syntax-error #f "bad goal syntax" stx)]))
 
-  (define (compile-term stx)
-    (apply-as-transformer core-term-compile #f stx))
-  
-  (define (compile-goal stx)
-    (apply-as-transformer core-goal-compile #f stx))
+  (define (dispatch-compile stx)
+    (apply-as-transformer compile #f stx))
 
   (define relation-impl (make-free-id-table))
+
+  (define (build-conj2 l)
+    (when (null? l) (error 'build-conj2 "requires at least one item"))
+    (let rec ([l (reverse l)])
+      (if (= (length l) 1)
+          (car l)
+      #`(conj2
+         #,(rec (cdr l))
+         #,(car l)))))
   
+  (define (reorder-conjunction stx)
+    (define lvars '())
+    (define unifications '())
+    (define others '())
+    (let rec ([stx stx])
+      (syntax-parse stx #:literals (conj2 fresh1 ==)
+        [(conj2 g1 g2) (rec #'g1) (rec #'g2)]
+        [(fresh1 (x:id ...) g)
+         (set! lvars (cons (syntax->list #'(x ...)) lvars))
+         (rec #'g)]
+        [(== t1 t2) (set! unifications (cons this-syntax unifications))]
+        [_ (set! others (cons this-syntax others))]))
+    (define final-vars (apply append (reverse lvars)))
+    (define body (build-conj2 (append (reverse unifications) (reverse others))))
+    (if (null? final-vars)
+        body
+        #`(fresh1 #,final-vars #,body)))
+  
+  (define (reorder-conjunctions stx)
+    (map-transform
+     stx
+     (syntax-parser #:literals (conj2 fresh1)
+                    [((~or conj2 fresh1) . _) (reorder-conjunction this-syntax)]
+                    [_ this-syntax])))
+
+  (define (compile-goal stx sc)
+    (define expanded (expand-goal stx sc))
+    (define reordered (reorder-conjunctions expanded))
+    (define compiled (dispatch-compile reordered))
+    compiled)
   )
 
 ; run and define-relations are the interface with Racket
@@ -90,10 +132,8 @@
       (def/stx (v^ ...)
         (for/list ([v (syntax->list #'(v ...))])
           (bind-logic-var! sc v)))
-      (def/stx g^ (expand-goal #'g sc))
-
-      (def/stx g^^ (compile-goal #'g^))
-      #'(mk:run n (v^ ...) g^^))]))
+      (def/stx g^ (compile-goal #'g sc))
+      #'(mk:run n (v^ ...) g^))]))
 
 (define-syntax relation
   (syntax-parser
@@ -104,19 +144,16 @@
       (def/stx (v^ ...)
         (for/list ([v (syntax->list #'(v ...))])
           (bind-logic-var! sc v)))
-      (def/stx g^ (expand-goal #'g sc))
-
-      ; Compile
-      (def/stx g^^ (compile-goal #'g^))
+      (def/stx g^ (compile-goal #'g sc))
       #'(lambda (v^ ...)
-          g^^))]))
+          g^))]))
 
 (define-syntax define-relation
   (syntax-parser 
     [(_ (name:id v:id ...) g)
      #`(begin
          ; Bind static information for expansion
-         (define-syntax name (relation-binding-instance #,(length (syntax->list #'(v ...)))))
+         (define-syntax name (make-relation-binding #,(length (syntax->list #'(v ...)))))
          ; Create mapping from source relation name to compiled function name
          (begin-for-syntax
            (free-id-table-set! relation-impl #'name #'tmp))
@@ -131,26 +168,30 @@
    (unless (logic-var-binding? #'v)
      (raise-syntax-error #f "unbound logic variable" #'v))
    this-syntax]
-  [(core-term-compile)
-   #'v])
+  [(compile) #'v]
+  [(map-transform f) (f this-syntax)])
 
 (define-syntax/generics (#%term-datum l:number)
   [(core-term) this-syntax]
-  [(core-term-compile) #'(quote l)])
+  [(compile) #'(quote l)]
+  [(map-transform f) (f this-syntax)])
 
 (define-syntax/generics (new-quote d)
   [(core-term) this-syntax]
-  [(core-term-compile) #'(quote d)])
+  [(compile) #'(quote d)]
+  [(map-transform f) (f this-syntax)])
 
 (define-syntax/generics (new-cons t1 t2)
   [(core-term)
    (def/stx t1^ (expand-term #'t1 #f))
    (def/stx t2^ (expand-term #'t2 #f))
-   #'(new-cons t1^ t2^)]
-  [(core-term-compile)
-   (def/stx t1^ (compile-term #'t1))
-   (def/stx t2^ (compile-term #'t2))
-   #'(cons t1^ t2^)])
+   (qstx/rc (new-cons t1^ t2^))]
+  [(compile)
+   (def/stx t1^ (dispatch-compile #'t1))
+   (def/stx t2^ (dispatch-compile #'t2))
+   (qstx/rc (cons t1^ t2^))]
+  [(map-transform f)
+   (f (qstx/rc (new-cons #,(map-transform #'t1 f) #,(map-transform #'t2 f))))])
 
 ; Goal forms
 
@@ -161,18 +202,22 @@
        (def/stx t1^ (expand-term #'t1 #f))
        (def/stx t2^ (expand-term #'t2 #f))
        (qstx/rc (op t1^ t2^))]
-      [(core-goal-compile)
-       (def/stx t1^ (compile-term #'t1))
-       (def/stx t2^ (compile-term #'t2))
-       #`(#,runtime-op t1^ t2^)]))
+      [(compile)
+       (def/stx t1^ (dispatch-compile #'t1))
+       (def/stx t2^ (dispatch-compile #'t2))
+       #`(#,runtime-op t1^ t2^)]
+      [(map-transform f)
+       (f (qstx/rc (op #,(map-transform #'t1 f) #,(map-transform #'t2 f))))]))
   (define (unary-term runtime-op)
     (generics/parse (op t)
       [(core-goal)   
        (def/stx t^ (expand-term #'t #f))
        (qstx/rc (op t^))]
-      [(core-goal-compile)
-       (def/stx t^ (compile-term #'t))
-       #`(#,runtime-op t^)])))
+      [(compile)
+       (def/stx t^ (dispatch-compile #'t))
+       #`(#,runtime-op t^)]
+      [(map-transform f)
+       (f (qstx/rc (op #,(map-transform #'t f))))])))
 
 (define-syntax == (binary-term #'mk:==))
 (define-syntax =/= (binary-term #'mk:=/=))
@@ -183,11 +228,11 @@
 (define-syntax/generics (#%rel-app n t ...)
   [(core-goal)
    ; Check relation is bound
-   (unless (relation-binding? #'n)
+   (unless (relation-binding-argc? #'n)
      (raise-syntax-error #f "unbound relation" #'n))
    
    ; Check argument count matches definition
-   (let ([expected (relation-binding #'n)]
+   (let ([expected (relation-binding-argc #'n)]
          [actual (length (syntax->list #'(t ...)))])
      (unless (= expected actual)
        (raise-syntax-error
@@ -199,32 +244,41 @@
      (for/list ([t (syntax->list #'(t ...))])
        (expand-term t #f)))
    (qstx/rc (#%rel-app n t^ ...))]
-  [(core-goal-compile)
+  [(compile)
    (def/stx (t^ ...)
      (for/list ([t (syntax->list #'(t ...))])
-       (compile-term t)))
+       (dispatch-compile t)))
    (def/stx n^ (free-id-table-ref relation-impl #'n))
-   #'(#%app n^ t^ ...)])
+   #'(#%app n^ t^ ...)]
+  [(map-transform f)
+   (def/stx (t^ ...)
+     (for/list ([t (syntax->list #'(t ...))])
+       (map-transform t f)))
+   (f (qstx/rc (#%rel-app n t^ ...)))])
 
 (define-syntax/generics (disj2 g1 g2)
   [(core-goal)
    (def/stx g1^ (expand-goal #'g1 #f))
    (def/stx g2^ (expand-goal #'g2 #f))
    (qstx/rc (disj2 g1^ g2^))]
-  [(core-goal-compile)
-   (def/stx g1^ (compile-goal #'g1))
-   (def/stx g2^ (compile-goal #'g2))
-   #'(mk:conde [g1^] [g2^])])
+  [(compile)
+   (def/stx g1^ (dispatch-compile #'g1))
+   (def/stx g2^ (dispatch-compile #'g2))
+   #'(mk:conde [g1^] [g2^])]
+  [(map-transform f)
+   (f (qstx/rc (disj2 #,(map-transform #'g1 f) #,(map-transform #'g2 f))))])
 
 (define-syntax/generics (conj2 g1 g2)
   [(core-goal)
    (def/stx g1^ (expand-goal #'g1 #f))
    (def/stx g2^ (expand-goal #'g2 #f))
    (qstx/rc (conj2 g1^ g2^))]
-  [(core-goal-compile)
-   (def/stx g1^ (compile-goal #'g1))
-   (def/stx g2^ (compile-goal #'g2))
-   #'(mk:fresh () g1^ g2^)])
+  [(compile)
+   (def/stx g1^ (dispatch-compile #'g1))
+   (def/stx g2^ (dispatch-compile #'g2))
+   #'(mk:fresh () g1^ g2^)]
+  [(map-transform f)
+   (f (qstx/rc (conj2 #,(map-transform #'g1 f) #,(map-transform #'g2 f))))])
 
 (define-syntax/generics (fresh1 (x:id ...) g)
   [(core-goal)
@@ -234,9 +288,11 @@
        (bind-logic-var! sc x)))
    (def/stx g^ (expand-goal #'g sc))
    (qstx/rc (fresh1 (x^ ...) g^))]
-  [(core-goal-compile)
-   (def/stx g^ (compile-goal #'g))
-   #'(mk:fresh (x ...) g^)])
+  [(compile)
+   (def/stx g^ (dispatch-compile #'g))
+   #'(mk:fresh (x ...) g^)]
+  [(map-transform f)
+   (f (qstx/rc (fresh1 (x ...) #,(map-transform #'g f))))])
 
 ; Syntactic sugar
 
@@ -260,6 +316,8 @@
 
 (define-goal-macro fresh
   (syntax-parser
+    [(fresh () g1 g* ...)
+     #'(conj g1 g* ...)]
     [(fresh (x:id ...)
        g1 g* ...)
      #'(fresh1 (x ...)
@@ -282,16 +340,12 @@
   (syntax-parser 
     [(_ q)
      (let rec ([stx #'q])
-       (syntax-parse stx
-         #:literals (unquote)
-         [(unquote e)
-          #'e]
+       (syntax-parse stx #:datum-literals (unquote)
+         [(unquote e) #'e]
          [(unquote . rest)
           (raise-syntax-error 'unquote "bad unquote syntax" stx)]
-         [(a . d)
-          #`(new-cons #,(rec #'a) #,(rec #'d))]
-         [(~or* v:identifier v:number)
-          #'(new-quote v)]
+         [(a . d) #`(new-cons #,(rec #'a) #,(rec #'d))]
+         [(~or* v:identifier v:number) #'(new-quote v)]
          [() #'(new-quote ())]))]))
 
 (define-goal-macro matche
