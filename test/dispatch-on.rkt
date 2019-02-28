@@ -15,7 +15,7 @@
   (define (expand stx)
     (syntax-parse stx
       [(e1 op:id e2)
-       (apply-as-transformer infix #f stx)]))
+       (apply-as-transformer infix 'expression #f stx)]))
   )
 
 
