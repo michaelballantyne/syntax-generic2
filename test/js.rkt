@@ -21,17 +21,19 @@
   (define-syntax-generic js-variable)
   (define-syntax-generic js-transformer)
 
-  (define (bind-var! name sc)
-    (scope-bind! sc name
-                 (generics
-                  [js-variable (lambda (stx) stx)])))
+  (define the-js-var-binding
+    (generics
+     [js-variable (lambda (stx) stx)]))
+  
+  (define (bind-var! ctx name)
+    (bind! ctx name #'the-js-var-binding))
 
   (define (js-expand-expression stx ctx)
     (syntax-parse stx
       [_ #:when (js-transformer? stx ctx)
-         (js-expand-expression (apply-as-transformer js-transformer ctx stx) ctx)]
+         (js-expand-expression (apply-as-transformer js-transformer 'expression ctx stx) ctx)]
       [_ #:when (js-core-expression? stx ctx)
-         (apply-as-transformer js-core-expression ctx stx)]
+         (apply-as-transformer js-core-expression 'expression ctx stx)]
       [_ #:when (js-core-statement-pass1? stx ctx)
          (raise-syntax-error #f "js statement not valid in js expression position" stx)]
 
@@ -53,25 +55,25 @@
   (define (js-expand-statement-pass1 stx ctx)    
     (syntax-parse stx
       [_ #:when (js-transformer? stx ctx)
-         (js-expand-statement-pass1 (apply-as-transformer js-transformer ctx stx) ctx)]
+         (js-expand-statement-pass1 (apply-as-transformer js-transformer (list ctx) ctx stx) ctx)]
       [_ #:when (js-core-statement-pass1? stx)
-         (apply-as-transformer js-core-statement-pass1 ctx stx ctx)]
+         (apply-as-transformer js-core-statement-pass1 (list ctx) ctx stx ctx)]
       ; Assume it's an expression; we'll expand those in pass 2.
       [_ stx]))
 
   (define (js-expand-statement-pass2 stx ctx)
     (syntax-parse stx
       [_ #:when (js-core-statement-pass2? stx ctx)
-         (apply-as-transformer js-core-statement-pass2 ctx stx)]
+         (apply-as-transformer js-core-statement-pass2 (list ctx) ctx stx)]
       [_ (js-expand-expression stx ctx)]))
 
-  (define (expand-block body parent-sc)
-    (define sc (make-definition-scope parent-sc))
+  (define (expand-block body ctx)
+    (define sc (make-scope))
     (define body^
       (for/list ([b (syntax->list body)])
-        (js-expand-statement-pass1 b sc)))
+        (js-expand-statement-pass1 (add-scope b sc) ctx)))
     (for/list ([b body^])
-      (js-expand-statement-pass2 b sc)))
+      (js-expand-statement-pass2 b ctx)))
 
   ; Compilation to JS
   
@@ -150,12 +152,13 @@
 
 (define-syntax/generics (function (x:id ...) body ...)
   [(js-core-expression)
-   (define sc (make-expression-scope))
+   (define ctx (make-def-ctx))
+   (define sc (make-scope))
    (def/stx (x^ ...)
      (for/list ([x (syntax->list #'(x ...))])
-       (bind-var! x sc)))
+       (bind-var! ctx (add-scope x sc))))
    (def/stx (body^ ...)
-     (expand-block #'(body ...) sc))
+     (expand-block (add-scope #'(body ...) sc) ctx))
    #'(function (x^ ...) body^ ...)]
   [(extract-js-expression idmap)
    (hasheq
@@ -206,7 +209,7 @@
 
 (define-syntax/generics (let x:id e)
   [(js-core-statement-pass1 ctx)   
-   (qstx/rc (let #,(bind-var! #'x ctx) e))]
+   (qstx/rc (let #,(bind-var! ctx #'x) e))]
   [(js-core-statement-pass2)
    (qstx/rc (let x #,(js-expand-expression #'e #f)))]
   [(extract-js-statement idmap)
@@ -220,8 +223,8 @@
            'init (extract-js-expression #'e idmap))))])
 
 (define-syntax/generics (let-syntax m:id e)
-  [(js-core-statement-pass1 sc)
-   (def/stx m^ (scope-bind! sc #'m #'(generics [js-transformer e])))
+  [(js-core-statement-pass1 ctx)
+   (def/stx m^ (bind! ctx #'m #'(generics [js-transformer e])))
    #'(let-syntax m^ e)]
   [(js-core-statement-pass2) this-syntax]
   [(extract-js-statement idmap)
@@ -276,12 +279,12 @@
   (syntax-parser
     [(_ arg)
      (with-disappeared-uses-and-bindings
-      (def/stx expanded-js (js-expand-expression #'arg #f))
-      (def/stx extracted (extract-js-expression #'expanded-js (make-idmap)))
-      #'(begin
-          (define wrapped (hash 'type "ExpressionStatement" 'expression 'extracted))
-          ;(pretty-display wrapped)
-          (runjs wrapped)))]))
+         (def/stx expanded-js (js-expand-expression #'arg #f))
+       (def/stx extracted (extract-js-expression #'expanded-js (make-idmap)))
+       #'(begin
+           (define wrapped (hash 'type "ExpressionStatement" 'expression 'extracted))
+           ;(pretty-display wrapped)
+           (runjs wrapped)))]))
 
 ; Finally, some macros! These ones defined outside the language.
 
@@ -319,10 +322,10 @@
                                               ((return (* n (factorial (- n 1))))))))
                  (return (factorial 5)))))
   ; Thought this was broken due to expander bug, but doesn't seem to be...
-  (js ((function ()
-                   (defn (factorial n)
-                     (return (? (<= n 1) 1 (* n (factorial (- n 1))))))
-                   (return (factorial 5)))))
+  #;(js ((function ()
+                 (defn (factorial n)
+                   (return (? (<= n 1) 1 (* n (factorial (- n 1))))))
+                 (return (factorial 5)))))
   
 
   (js ((function ()

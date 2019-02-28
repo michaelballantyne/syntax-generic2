@@ -37,15 +37,15 @@
   (define-syntax-generic logic-var-binding)
   (define-syntax-generic map-transform)
 
-  (define (make-logic-var-binding)
+  (define the-logic-var-binding
     (generics
      ; Currently unreachable as there are no Racket subexpressions of mk goals
      [expand (λ (stx) (raise-syntax-error
                        #f "logic variables may only be used in miniKanren terms" stx))]
      [logic-var-binding (lambda (stx) stx)]))
   
-  (define (bind-logic-var! sc name)
-    (scope-bind! sc name #'(make-logic-var-binding)))
+  (define (bind-logic-var! ctx name)
+    (bind! ctx name #'the-logic-var-binding))
 
   (define (make-relation-binding proc n)
     (generics
@@ -67,24 +67,24 @@
        (with-syntax ([#%term-datum (datum->syntax stx '#%term-datum)])
          (expand-term (qstx/rc (#%term-datum l)) sc))]
       [_ #:when (core-term? stx sc)
-         (apply-as-transformer core-term sc stx)]  ; dispatch to other core term forms
+         (apply-as-transformer core-term 'expression sc stx)]  ; dispatch to other core term forms
       [_ #:when (term-macro? stx sc)
-         (expand-term (apply-as-transformer term-macro sc stx) sc)]
+         (expand-term (apply-as-transformer term-macro 'expression sc stx) sc)]
       [_ (raise-syntax-error #f "bad term syntax" stx)]))
   
   (define (expand-goal stx sc)
     (syntax-parse stx
       [_ #:when (core-goal? stx sc)
-         (apply-as-transformer core-goal sc stx)]
+         (apply-as-transformer core-goal 'expression sc stx)]
       [_ #:when (goal-macro? stx sc)
-         (expand-goal (apply-as-transformer goal-macro sc stx) sc)]
+         (expand-goal (apply-as-transformer goal-macro 'expression sc stx) sc)]
       [(n:id t ...) ; if n not bound as goal syntax, interpret as a relation application
        (with-syntax ([#%rel-app (datum->syntax stx '#%rel-app)])
          (expand-goal (qstx/rc (#%rel-app n t ...)) sc))]
       [_ (raise-syntax-error #f "bad goal syntax" stx)]))
 
   (define (dispatch-compile stx)
-    (apply-as-transformer compile #f stx))
+    (apply-as-transformer compile 'expression #f stx))
 
   #;(define relation-impl (make-free-id-table))
 
@@ -138,11 +138,12 @@
     [(_ n:number (v:id ...) g)
      (with-disappeared-uses-and-bindings
       ; Expansion
-      (define sc (make-expression-scope))
+      (define ctx (make-def-ctx))
+      (define sc (make-scope))
       (def/stx (v^ ...)
         (for/list ([v (syntax->list #'(v ...))])
-          (bind-logic-var! sc v)))
-      (def/stx g^ (compile-goal #'g sc))
+          (bind-logic-var! ctx (add-scope v sc))))
+      (def/stx g^ (compile-goal (add-scope #'g sc) ctx))
       #'(mk:run n (v^ ...) g^))]))
 
 (define-syntax relation
@@ -150,11 +151,12 @@
     [(_ (v:id ...) g)
      (with-disappeared-uses-and-bindings
       ; Expand
-      (define sc (make-expression-scope))
+      (define ctx (make-def-ctx))
+      (define sc (make-scope))
       (def/stx (v^ ...)
         (for/list ([v (syntax->list #'(v ...))])
-          (bind-logic-var! sc v)))
-      (def/stx g^ (compile-goal #'g sc))
+          (bind-logic-var! ctx (add-scope v sc))))
+      (def/stx g^ (compile-goal (add-scope #'g sc) ctx))
       #'(relation-value
          (lambda (v^ ...)
            g^)))]))
@@ -323,11 +325,12 @@
 
 (define-syntax/generics (fresh1 (x:id ...) g)
   [(core-goal)
-   (define sc (make-expression-scope))
+   (define ctx (make-def-ctx))
+   (define sc (make-scope))
    (def/stx (x^ ...)
      (for/list ([x (syntax->list #'(x ...))])
-       (bind-logic-var! sc x)))
-   (def/stx g^ (expand-goal #'g sc))
+       (bind-logic-var! ctx (add-scope x sc))))
+   (def/stx g^ (expand-goal (add-scope #'g sc) ctx))
    (qstx/rc (fresh1 (x^ ...) g^))]
   [(compile)
    (def/stx g^ (dispatch-compile #'g))

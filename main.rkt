@@ -18,16 +18,22 @@
  record-disappeared-bindings
  
  unbound
- racket-variable
+ #;racket-variable
 
- scope?
- make-expression-scope
- make-definition-scope
- in-scope
- defctx->scope
- scope-defctxs
- scope-bind!
- scope-lookup
+ #;scope?
+ #;make-expression-scope
+ #;make-definition-scope
+ #;in-scope
+ #;defctx->scope
+ #;scope-defctxs
+ #;scope-bind!
+ #;scope-lookup
+
+ bind!
+ make-def-ctx
+ make-scope
+ add-scope
+ add-scopes
  
  apply-as-transformer
  
@@ -79,9 +85,10 @@
 
 (define-syntax-rule (with-disappeared-uses-and-bindings body-expr ... stx-expr)
   (with-disappeared-uses
-   (with-disappeared-bindings
-    body-expr ... stx-expr)))
+      (with-disappeared-bindings
+          body-expr ... stx-expr)))
 
+#|
 ; Higher-level APIs for scope and binding. Not sure where these should
 ; live, ultimately.
 
@@ -197,8 +204,47 @@
      definition-scope?))
   (scope defctx '() definition-scope?))
 
+|#
+
 ; Apply as transformer. Perhaps should eventually be added to
 ; syntax/apply-transformer?
+
+(define (add-ctx-scope ctx stx)
+  (if ctx
+      (internal-definition-context-introduce ctx stx 'add)
+      stx))
+
+(define (make-scope) (make-syntax-introducer #t))
+(define (make-def-ctx) (syntax-local-make-definition-context))
+(define (bind! ctx id stx)
+  (syntax-local-bind-syntaxes (list id) stx ctx)
+  (define id-in-sc (add-ctx-scope ctx (syntax-local-identifier-as-binding id)))
+  (record-disappeared-bindings id-in-sc)
+  id-in-sc)
+(define (add-scope stx sc)
+  (sc stx 'add))
+(define (add-scopes stx scs)
+  (for/fold ([stx stx])
+            ([sc scs])
+    (sc stx 'add)))
+
+(define unbound
+  (let ()
+    (struct unbound [])
+    (unbound)))
+
+(define (scope-lookup ctx id)
+  (define id-in-sc (add-ctx-scope ctx id))
+  (define result
+    (syntax-local-value
+     id-in-sc
+     (lambda () unbound)
+     ctx))
+
+  (unless (eq? result unbound)
+    (record-disappeared-uses id-in-sc))
+  
+  result)
 
 (struct wrapper (contents))
 
@@ -215,17 +261,17 @@
             arg))
       arg))
 
-(define (apply-as-transformer f sc . args)
+(define (apply-as-transformer f ctx-type ctx . args)
   (unless (procedure? f)
     (raise-argument-error
      'apply-as-transformer
      "procedure?"
      f))
-  (unless (or (eq? #f sc) (scope? sc))
-    (raise-argument-error
-     'apply-as-transformer
-     "(or/c scope? #f)"
-     sc))
+  #;(unless (or (eq? #f sc) (scope? sc))
+      (raise-argument-error
+       'apply-as-transformer
+       "(or/c scope? #f)"
+       sc))
 
   (define (single-argument-transformer stx)
     (call-with-values
@@ -235,13 +281,16 @@
   (define res
     (local-apply-transformer
      single-argument-transformer
-     (in-scope sc (datum->syntax #f (map wrap args)))
-     (if sc
-         (if (scope-definition-scope? sc)
-             (scope-defctxs sc)
-             'expression)
-         (syntax-local-context))
-     (if sc (scope-defctxs sc) '())))
+     (datum->syntax #f (map wrap args))
+     ctx-type
+     (cond
+       [(internal-definition-context? ctx) (list ctx)]
+       [(list? ctx) ctx]
+       [(not ctx) '()]
+       [else (raise-argument-error
+              'apply-as-transformer
+              "(or/c internal-definition-context? (listof internal-definition-context?) #f)"
+              ctx)])))
   
   (apply values (map unwrap (syntax->list res))))
 
@@ -287,7 +336,7 @@
        pred-name
        "syntax?"
        stx-arg))
-    (unless (or (eq? sc #f) (scope? sc))
+    (unless (or (eq? sc #f) (internal-definition-context? sc))
       (raise-argument-error
        pred-name
        "(or/c scope? #f)"
