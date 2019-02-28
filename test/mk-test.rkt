@@ -1,4 +1,4 @@
-#lang racket/base
+#lang racket
 
 (require "mk-lang.rkt")
 
@@ -7,12 +7,12 @@
 ;(define-syntax-rule (define-relation (n v ...) g ...) (define (n v ...) g ...))
 
 (define-relation (appendo l1 l2 l3)
-  (conde
-   [(== l1 '()) (== l3 l2)]  ; base case
-   [(fresh (head rest result) ; recursive case
-      (== `(,head . ,rest) l1)
-      (== `(,head . ,result) l3)
-      (appendo rest l2 result))]))
+    (conde
+     [(== l1 '()) (== l3 l2)]  ; base case
+     [(fresh (head rest result) ; recursive case
+        (== `(,head . ,rest) l1)
+        (== `(,head . ,result) l3)
+        (appendo rest l2 result))]))
 
 (define-relation (appendo2 l1 l2 l3)
   (matche [l1 l3]
@@ -81,5 +81,16 @@
 (run 2 (q) (appendo '(a b) '(c) q))
 (run 2 (q) (appendo2 '(a b) '(c) q))
 (run 2 (q) (appendo3 '(a b) '(c) q))
+
+(define (make-naturals c)
+  (relation (n)
+            (conde
+             [(== n c)]
+             [(apply-relation (make-naturals (+ c 1)) n)])))
+(define-relation (naturals n)
+  (apply-relation (make-naturals 0) n))
+(run 10 (q)
+  (naturals q)) 
+
 
 #;(run 1 (q) (eval-expo q '() q))
