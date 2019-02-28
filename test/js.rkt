@@ -318,8 +318,8 @@
                                               ((return 1))
                                               ((return (* n (factorial (- n 1))))))))
                  (return (factorial 5)))))
-  ; Broken due to expander bug.
-  #;(js ((function ()
+  ; Thought this was broken due to expander bug, but doesn't seem to be...
+  (js ((function ()
                    (defn (factorial n)
                      (return (? (<= n 1) 1 (* n (factorial (- n 1))))))
                    (return (factorial 5)))))
