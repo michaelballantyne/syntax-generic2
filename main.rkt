@@ -25,7 +25,7 @@
  make-definition-scope
  in-scope
  defctx->scope
- scope-defctx
+ scope-defctxs
  scope-bind!
  scope-lookup
  
@@ -85,7 +85,7 @@
 ; Higher-level APIs for scope and binding. Not sure where these should
 ; live, ultimately.
 
-(struct scope [defctx introducers definition-scope?])
+(struct scope [defctxs introducers definition-scope?])
 
 (define (make-expression-scope [parent #f])
   (make-scope 'make-expression-scope #f parent))
@@ -98,9 +98,7 @@
      fn-name
      "(or/c scope? #f)"
      parent))
-  (scope (if parent
-             (scope-defctx parent)
-             (syntax-local-make-definition-context))
+  (scope (cons (syntax-local-make-definition-context) (if parent (scope-defctxs parent) '()))
          (cons (make-syntax-introducer #t)
                (if parent
                    (scope-introducers parent)
@@ -109,12 +107,13 @@
 
 (define (in-scope sc stx)
   (if sc
-      (internal-definition-context-introduce
-       (scope-defctx sc)
-       (for/fold ([stx stx])
-                 ([introducer (scope-introducers sc)])
-         (introducer stx 'add))
-       'add)
+      (let ()
+        (define stx1
+          (for/fold ([stx stx]) ([ctx (scope-defctxs sc)])
+            (internal-definition-context-introduce ctx stx 'add)
+            ))
+        (for/fold ([stx stx1]) ([introducer (scope-introducers sc)])
+          (introducer stx 'add)))
       stx))
 
 (define unbound
@@ -151,7 +150,7 @@
     (syntax-local-value
      id-in-sc
      (lambda () unbound)
-     (and sc (scope-defctx sc))))
+     (and sc (scope-defctxs sc))))
 
   (unless (eq? result unbound)
     (record-disappeared-uses id-in-sc))
@@ -178,7 +177,8 @@
      [(syntax? rhs) rhs]
      [(eq? racket-variable rhs) #f]
      [else (datum->syntax (quote-syntax here) (list 'quote rhs))])
-   (scope-defctx sc))
+   (car (scope-defctxs sc))
+   (scope-defctxs sc))
   
   (record-disappeared-bindings id-in-sc)
   
@@ -238,10 +238,10 @@
      (in-scope sc (datum->syntax #f (map wrap args)))
      (if sc
          (if (scope-definition-scope? sc)
-             (list (scope-defctx sc))
+             (scope-defctxs sc)
              'expression)
          (syntax-local-context))
-     (if sc (list (scope-defctx sc)) '())))
+     (if sc (scope-defctxs sc) '())))
   
   (apply values (map unwrap (syntax->list res))))
 
