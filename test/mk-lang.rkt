@@ -481,3 +481,17 @@
 ;       | number
 ;       | string
 ;       | symbol
+
+(module+ private
+  (provide
+   relation-value-proc
+   relation-value?
+   mk-value?
+   (for-syntax
+    core-term
+    core-goal
+    compile
+    map-transform
+    expand-term
+    dispatch-compile
+    )))
