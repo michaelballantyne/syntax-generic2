@@ -281,10 +281,12 @@
 
 (define-syntax/generics (apply-relation e t ...)
   [(core-goal)
+   (def/stx e^
+     (local-expand #'e 'expression null))
    (def/stx (t^ ...)
      (for/list ([t (syntax->list #'(t ...))])
        (expand-term t #f)))
-   (qstx/rc (apply-relation e t^ ...))]
+   (qstx/rc (apply-relation e^ t^ ...))]
   [(compile)
    (def/stx (t^ ...)
      (for/list ([t (syntax->list #'(t ...))])
