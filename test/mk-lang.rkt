@@ -224,21 +224,23 @@
 
 ; Goal forms
 
-(begin-for-syntax
-  (define (binary-term runtime-op)
-    (generics/parse (op t1 t2)
+(define-syntax-rule (binary-term name runtime-op)
+  (define-syntax name
+    (generics/parse (name t1 t2)
       [(core-goal)
        (def/stx t1^ (expand-term #'t1 #f))
        (def/stx t2^ (expand-term #'t2 #f))
-       (qstx/rc (op t1^ t2^))]
+       (qstx/rc (name t1^ t2^))]
       [(compile)
        (def/stx t1^ (dispatch-compile #'t1))
        (def/stx t2^ (dispatch-compile #'t2))
        #`(#,runtime-op t1^ t2^)]
       [(map-transform f)
-       (f (qstx/rc (op #,(map-transform #'t1 f) #,(map-transform #'t2 f))))]))
-  (define (unary-term runtime-op)
-    (generics/parse (op t)
+       (f (qstx/rc (name #,(map-transform #'t1 f) #,(map-transform #'t2 f))))])))
+  
+(define-syntax-rule (unary-term name runtime-op)
+  (define-syntax name
+    (generics/parse (name t)
       [(core-goal)   
        (def/stx t^ (expand-term #'t #f))
        (qstx/rc (op t^))]
@@ -246,13 +248,13 @@
        (def/stx t^ (dispatch-compile #'t))
        #`(#,runtime-op t^)]
       [(map-transform f)
-       (f (qstx/rc (op #,(map-transform #'t f))))])))
+       (f (qstx/rc (name #,(map-transform #'t f))))])))
 
-(define-syntax == (binary-term #'mk:==))
-(define-syntax =/= (binary-term #'mk:=/=))
-(define-syntax absento (binary-term #'mk:absento))
-(define-syntax symbolo (unary-term #'mk:symbolo))
-(define-syntax numbero (unary-term #'mk:numbero))
+(binary-term == #'mk:==)
+(binary-term =/= #'mk:=/=)
+(binary-term absento #'mk:absento)
+(unary-term symbolo #'mk:symbolo)
+(unary-term numbero #'mk:numbero)
 
 (define-syntax/generics (#%rel-app n t ...)
   [(core-goal)

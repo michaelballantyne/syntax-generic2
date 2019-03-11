@@ -400,6 +400,7 @@
      #:with empty (datum->syntax #'name '||)
      #'(let ()
          (define-syntax-class cls
+           #:description (format "~a" '(name pat ...))
            (pattern (name pat ...)))
          (generics
           [method (lambda (stx args ...)
