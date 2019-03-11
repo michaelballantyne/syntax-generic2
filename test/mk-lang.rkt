@@ -3,6 +3,7 @@
 (require
   syntax-generic2/define
   syntax-generic2/errors
+  syntax/parse/define
   (prefix-in mk: minikanren)
   racket/base
   (only-in racket/base [quote mk:quote] [#%app mk:app])
@@ -98,23 +99,21 @@
              #,(recur (cdr l))
              #,(car l)))))
 
+  ; TODO: also account for =/=, symbolo, numbero, absento
   (define (reorder-conjunction stx)
     (define lvars '())
-    (define constraints '())
+    (define unifications '())
     (define others '())
     (let recur ([stx stx])
-      (syntax-parse stx #:literals (conj2 fresh1 == =/= absento symbolo numbero)
+      (syntax-parse stx #:literals (conj2 fresh1 ==)
         [(conj2 g1 g2) (recur #'g1) (recur #'g2)]
         [(fresh1 (x:id ...) g)
          (set! lvars (cons (syntax->list #'(x ...)) lvars))
          (recur #'g)]
-        [(~or*
-          ((~or* == =/= absento) t1 t2)
-          ((~or* symbolo numbero) t1))
-         (set! constraints (cons this-syntax constraints))]
+        [(== t1 t2) (set! unifications (cons this-syntax unifications))]
         [_ (set! others (cons (reorder-conjunctions this-syntax) others))]))
     (let ([lvars (apply append (reverse lvars))]
-          [body (build-conj2 (append (reverse constraints) (reverse others)))])
+          [body (build-conj2 (append (reverse unifications) (reverse others)))])
       (if (null? lvars)
           body
           #`(fresh1 #,lvars #,body))))
@@ -226,31 +225,38 @@
 
 ; Goal forms
 
-(define-syntax-rule (binary-term name runtime-op)
+(define-simple-macro (binary-term name runtime-op)
+  ; Hack needed because generics-parse introduces all the pattern vars
+  ;  with the same hygiene, taken from the head (due to internal use of
+  ;  a syntax class)
+  #:with name-local (datum->syntax #'here (syntax-e #'name))
   (define-syntax name
-    (generics/parse (name t1 t2)
+    (generics/parse (name-local t1 t2)
       [(core-goal)
        (def/stx t1^ (expand-term #'t1 #f))
        (def/stx t2^ (expand-term #'t2 #f))
-       (qstx/rc (name t1^ t2^))]
+       (qstx/rc (name-local t1^ t2^))]
       [(compile)
        (def/stx t1^ (dispatch-compile #'t1))
        (def/stx t2^ (dispatch-compile #'t2))
        #`(#,runtime-op t1^ t2^)]
       [(map-transform f)
-       (f (qstx/rc (name #,(map-transform #'t1 f) #,(map-transform #'t2 f))))])))
+       (def/stx t1^ (map-transform #'t1 f))
+       (def/stx t2^ (map-transform #'t2 f))
+       (f (qstx/rc (name-local t1^ t2^)))])))
   
-(define-syntax-rule (unary-term name runtime-op)
+(define-simple-macro (unary-term name runtime-op)
+  #:with name-local (datum->syntax #'here (syntax-e #'name))
   (define-syntax name
-    (generics/parse (name t)
+    (generics/parse (name-local t)
       [(core-goal)   
        (def/stx t^ (expand-term #'t #f))
-       (qstx/rc (op t^))]
+       (qstx/rc (name-local t^))]
       [(compile)
        (def/stx t^ (dispatch-compile #'t))
        #`(#,runtime-op t^)]
       [(map-transform f)
-       (f (qstx/rc (name #,(map-transform #'t f))))])))
+       (f (qstx/rc (name-local #,(map-transform #'t f))))])))
 
 (binary-term == #'mk:==)
 (binary-term =/= #'mk:=/=)
