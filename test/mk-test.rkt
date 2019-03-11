@@ -68,8 +68,6 @@
      ((== y x) (== v t))
      ((=/= y x) (lookupo x rest t)))))
 
-
-
 (define-relation (appendo3 l1 l2 l3)
   (conde
    [(== l1 '()) (== l3 l2)]

@@ -2,6 +2,7 @@
 
 (require
   syntax-generic2/define
+  syntax-generic2/errors
   (prefix-in mk: minikanren)
   racket/base
   (only-in racket/base [quote mk:quote] [#%app mk:app])
@@ -189,9 +190,14 @@
            (mk-value? (car v))
            (mk-value? (cdr v)))))
 
+(define (check-term-var val blame-stx)
+  (if (mk-value? val)
+      val
+      (raise-argument-error/stx 'term "mk-value?" val blame-stx)))
+
 (define-syntax/generics (#%rkt-ref v)
   [(core-term) this-syntax]
-  [(compile) (syntax/loc #'v (invariant-assertion mk-value? v))]
+  [(compile) #'(check-term-var v #'v)]
   [(map-transform f) (f this-syntax)])
 
 (define-syntax/generics (#%term-datum l:number)
@@ -279,6 +285,15 @@
        (map-transform t f)))
    (f (qstx/rc (#%rel-app n t^ ...)))])
 
+(define (check-relation val blame-stx)
+  (if (relation-value? val)
+      val
+      (raise-argument-error/stx
+       'apply-relation
+       "relation-value?"
+       val
+       blame-stx)))
+
 (define-syntax/generics (apply-relation e t ...)
   [(core-goal)
    (def/stx e^
@@ -291,7 +306,7 @@
    (def/stx (t^ ...)
      (for/list ([t (syntax->list #'(t ...))])
        (dispatch-compile t)))
-   (def/stx e^ (syntax/loc #'e (invariant-assertion relation-value? e)))
+   (def/stx e^ #'(check-relation e #'e))
    #'(#%app (relation-value-proc e^) t^ ...)]
   [(map-transform f)
    (def/stx (t^ ...)
