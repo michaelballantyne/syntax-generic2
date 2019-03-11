@@ -98,21 +98,23 @@
              #,(recur (cdr l))
              #,(car l)))))
 
-  ; TODO: also account for =/=, symbolo, numbero, absento
   (define (reorder-conjunction stx)
     (define lvars '())
-    (define unifications '())
+    (define constraints '())
     (define others '())
     (let recur ([stx stx])
-      (syntax-parse stx #:literals (conj2 fresh1 ==)
+      (syntax-parse stx #:literals (conj2 fresh1 == =/= absento symbolo numbero)
         [(conj2 g1 g2) (recur #'g1) (recur #'g2)]
         [(fresh1 (x:id ...) g)
          (set! lvars (cons (syntax->list #'(x ...)) lvars))
          (recur #'g)]
-        [(== t1 t2) (set! unifications (cons this-syntax unifications))]
+        [(~or*
+          ((~or* == =/= absento) t1 t2)
+          ((~or* symbolo numbero) t1))
+         (set! constraints (cons this-syntax constraints))]
         [_ (set! others (cons (reorder-conjunctions this-syntax) others))]))
     (let ([lvars (apply append (reverse lvars))]
-          [body (build-conj2 (append (reverse unifications) (reverse others)))])
+          [body (build-conj2 (append (reverse constraints) (reverse others)))])
       (if (null? lvars)
           body
           #`(fresh1 #,lvars #,body))))
