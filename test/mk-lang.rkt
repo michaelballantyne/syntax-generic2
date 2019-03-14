@@ -225,44 +225,51 @@
 
 ; Goal forms
 
-(define-simple-macro (binary-term name runtime-op)
-  ; Hack needed because generics-parse introduces all the pattern vars
-  ;  with the same hygiene, taken from the head (due to internal use of
-  ;  a syntax class)
-  #:with name-local (datum->syntax #'here (syntax-e #'name))
-  (define-syntax name
-    (generics/parse (name-local t1 t2)
+(begin-for-syntax
+  (define-syntax-class (binary-term/c name)  
+    #:description (format "(~a <term> <term>)" (syntax-e name))
+    (pattern (op t1 t2)))
+  (define (binary-term-methods name runtime-op)
+    (generics/parse (~var p (binary-term/c name))
       [(core-goal)
-       (def/stx t1^ (expand-term #'t1 #f))
-       (def/stx t2^ (expand-term #'t2 #f))
-       (qstx/rc (name-local t1^ t2^))]
+       (def/stx t1^ (expand-term #'p.t1 #f))
+       (def/stx t2^ (expand-term #'p.t2 #f))
+       (qstx/rc (p.op t1^ t2^))]
       [(compile)
-       (def/stx t1^ (dispatch-compile #'t1))
-       (def/stx t2^ (dispatch-compile #'t2))
+       (def/stx t1^ (dispatch-compile #'p.t1))
+       (def/stx t2^ (dispatch-compile #'p.t2))
        #`(#,runtime-op t1^ t2^)]
       [(map-transform f)
-       (def/stx t1^ (map-transform #'t1 f))
-       (def/stx t2^ (map-transform #'t2 f))
-       (f (qstx/rc (name-local t1^ t2^)))])))
-  
-(define-simple-macro (unary-term name runtime-op)
-  #:with name-local (datum->syntax #'here (syntax-e #'name))
+       (def/stx t1^ (map-transform #'p.t1 f))
+       (def/stx t2^ (map-transform #'p.t2 f))
+       (f (qstx/rc (p.op t1^ t2^)))])))
+(define-simple-macro (binary-term name runtime-op)
   (define-syntax name
-    (generics/parse (name-local t)
+    (binary-term-methods #'name #'runtime-op)))
+
+(begin-for-syntax
+  (define-syntax-class (unary-term/c name)  
+    #:description (format "(~a <term>)" (syntax-e name))
+    (pattern (op t)))
+  (define (unary-term-methods name runtime-op)
+    (generics/parse (~var p (unary-term/c name))
       [(core-goal)   
-       (def/stx t^ (expand-term #'t #f))
-       (qstx/rc (name-local t^))]
+       (def/stx t^ (expand-term #'p.t #f))
+       (qstx/rc (p.op t^))]
       [(compile)
-       (def/stx t^ (dispatch-compile #'t))
+       (def/stx t^ (dispatch-compile #'p.t))
        #`(#,runtime-op t^)]
       [(map-transform f)
-       (f (qstx/rc (name-local #,(map-transform #'t f))))])))
+       (f (qstx/rc (p.op #,(map-transform #'p.t f))))])))
+(define-simple-macro (unary-term name runtime-op)
+  (define-syntax name
+    (unary-term-methods #'name #'runtime-op)))
 
-(binary-term == #'mk:==)
-(binary-term =/= #'mk:=/=)
-(binary-term absento #'mk:absento)
-(unary-term symbolo #'mk:symbolo)
-(unary-term numbero #'mk:numbero)
+(binary-term == mk:==)
+(binary-term =/= mk:=/=)
+(binary-term absento mk:absento)
+(unary-term symbolo mk:symbolo)
+(unary-term numbero mk:numbero)
 
 (define-syntax/generics (#%rel-app n t ...)
   [(core-goal)
