@@ -62,16 +62,16 @@
        #:when (logic-var-binding? #'var)
        (with-syntax ([#%lv-ref (datum->syntax stx '#%lv-ref)])
          (expand-term (qstx/rc (#%lv-ref var)) sc))]
+      [_ #:when (core-term? stx sc)
+         (apply-as-transformer core-term 'expression sc stx)]  ; dispatch to other core term forms
+      [_ #:when (term-macro? stx sc)
+         (expand-term (apply-as-transformer term-macro 'expression sc stx) sc)]
       [var:id
        (with-syntax ([#%rkt-ref (datum->syntax stx '#%rkt-ref)])
          (expand-term (qstx/rc (#%rkt-ref var)) sc))]
       [(~or* l:number l:boolean)
        (with-syntax ([#%term-datum (datum->syntax stx '#%term-datum)])
          (expand-term (qstx/rc (#%term-datum l)) sc))]
-      [_ #:when (core-term? stx sc)
-         (apply-as-transformer core-term 'expression sc stx)]  ; dispatch to other core term forms
-      [_ #:when (term-macro? stx sc)
-         (expand-term (apply-as-transformer term-macro 'expression sc stx) sc)]
       [_ (raise-syntax-error #f "bad term syntax" stx)]))
   
   (define (expand-goal stx sc)
@@ -80,10 +80,13 @@
          (apply-as-transformer core-goal 'expression sc stx)]
       [_ #:when (goal-macro? stx sc)
          (expand-goal (apply-as-transformer goal-macro 'expression sc stx) sc)]
-      [(n:id t ...) ; if n not bound as goal syntax, interpret as a relation application
-       (with-syntax ([#%rel-app (datum->syntax stx '#%rel-app)])
-         (expand-goal (qstx/rc (#%rel-app n t ...)) sc))]
-      [_ (raise-syntax-error #f "bad goal syntax" stx)]))
+      [(head:id . rest) #:when (relation-binding-argc? #'head sc)
+                        (with-syntax ([#%rel-app (datum->syntax stx '#%rel-app)])
+                          (expand-goal (qstx/rc (#%rel-app head . rest)) sc))]
+      [_ (raise-syntax-error
+          #f
+          "bad goal syntax;\n   expected a relation application or other goal form\n"
+          stx)]))
 
   (define (dispatch-compile stx)
     (apply-as-transformer compile 'expression #f stx))
@@ -133,49 +136,74 @@
     compiled)
   )
 
+; common syntax classes
+(begin-for-syntax
+  (define-syntax-class goal/c
+    #:description "goal expression"
+    (pattern _))
+  (define-syntax-class term/c
+    #:description "term expression"
+    (pattern _))
+  (define-syntax-class bindings/c
+    #:description "binding list (<id> ...)"
+    (pattern (x:id ...)))
+  (define-syntax-class bindings+/c
+    #:description "binding list (<id> ...+)"
+    (pattern (x:id ...+))))
+
 ; run and define-relations are the interface with Racket
 
 (define-syntax run-core
   (syntax-parser
-    [(_ n:number (v:id ...) g)
+    [(~describe
+      "(run <number> (<id> ...+) <goal>)"
+      (_ n:number b:bindings+/c g:goal/c))
      (with-disappeared-uses-and-bindings
       ; Expansion
       (define ctx (make-def-ctx))
       (define sc (make-scope))
-      (def/stx (v^ ...)
-        (for/list ([v (syntax->list #'(v ...))])
-          (bind-logic-var! ctx (add-scope v sc))))
+      (def/stx (x^ ...)
+        (for/list ([x (syntax->list #'(b.x ...))])
+          (bind-logic-var! ctx (add-scope x sc))))
       (def/stx g^ (compile-goal (add-scope #'g sc) ctx))
-      #'(mk:run n (v^ ...) g^))]))
+      #'(mk:run n (x^ ...) g^))]))
 
 (define-syntax relation
   (syntax-parser
-    [(_ (v:id ...) g)
+    [(~describe
+      "(relation (<id> ...) <goal>)"
+      (_ b:bindings/c g:goal/c))
      (with-disappeared-uses-and-bindings
       ; Expand
       (define ctx (make-def-ctx))
       (define sc (make-scope))
-      (def/stx (v^ ...)
-        (for/list ([v (syntax->list #'(v ...))])
-          (bind-logic-var! ctx (add-scope v sc))))
+      (def/stx (x^ ...)
+        (for/list ([x (syntax->list #'(b.x ...))])
+          (bind-logic-var! ctx (add-scope x sc))))
       (def/stx g^ (compile-goal (add-scope #'g sc) ctx))
       #'(relation-value
-         (lambda (v^ ...)
+         (lambda (x^ ...)
            g^)))]))
 
+(begin-for-syntax
+  (define-syntax-class define-header/c
+    #:description "header (<name:id> <arg:id> ...)"
+    (pattern (name:id v:id ...))))
 (define-syntax define-relation
   (syntax-parser 
-    [(_ (name:id v:id ...) g)
+    [(~describe
+      "(define-relation (<name:id> <arg:id> ...) <goal>)"
+      (_ h:define-header/c g:goal/c))
      #`(begin
          ; Bind static information for expansion
-         (define-syntax name (make-relation-binding #'tmp #,(length (syntax->list #'(v ...)))))
+         (define-syntax h.name (make-relation-binding #'tmp #,(length (syntax->list #'(h.v ...)))))
          ; Binding for the the compiled function. Expansion of `relation` expands and compiles the
          ; body in the definition context's second pass.
-         (define tmp (relation (v ...) g)))]))
+         (define tmp (relation (h.v ...) g)))]))
 
 ; Term forms
 
-(define-syntax/generics (#%lv-ref v)
+(define-syntax/generics (#%lv-ref v:id)
   [(core-term)
    (unless (logic-var-binding? #'v)
      (raise-syntax-error #f "unbound logic variable" #'v))
@@ -197,7 +225,7 @@
       (raise-argument-error/stx 'term "mk-value?" val blame-stx)))
 
 (define-syntax/generics (#%rkt-ref v)
-  [(core-term) this-syntax]
+  [(core-term) #`(#%rkt-ref #,(local-expand #'v 'expression null))]
   [(compile) #'(check-term-var v #'v)]
   [(map-transform f) (f this-syntax)])
 
@@ -211,17 +239,21 @@
   [(compile) #'(quote d)]
   [(map-transform f) (f this-syntax)])
 
-(define-syntax/generics (new-cons t1 t2)
-  [(core-term)
-   (def/stx t1^ (expand-term #'t1 #f))
-   (def/stx t2^ (expand-term #'t2 #f))
-   (qstx/rc (new-cons t1^ t2^))]
-  [(compile)
-   (def/stx t1^ (dispatch-compile #'t1))
-   (def/stx t2^ (dispatch-compile #'t2))
-   (qstx/rc (cons t1^ t2^))]
-  [(map-transform f)
-   (f (qstx/rc (new-cons #,(map-transform #'t1 f) #,(map-transform #'t2 f))))])
+(define-syntax new-cons
+  (generics/parse (~describe
+                   "(cons <term> <term>)"
+                   (new-cons t1:term/c t2:term/c))
+    [(core-term)
+     (def/stx t1^ (expand-term #'t1 #f))
+     (def/stx t2^ (expand-term #'t2 #f))
+     (qstx/rc (new-cons t1^ t2^))]
+    [(compile)
+     (def/stx t1^ (dispatch-compile #'t1))
+     (def/stx t2^ (dispatch-compile #'t2))
+     (qstx/rc (cons t1^ t2^))]
+    [(map-transform f)
+     (f (qstx/rc (new-cons #,(map-transform #'t1 f)
+                           #,(map-transform #'t2 f))))]))
 
 ; Goal forms
 
@@ -376,8 +408,10 @@
 
 (define-syntax run
   (syntax-parser
-    [(_ n:number (v:id ...) g g* ...)
-     #'(run-core n (v ...) (conj g g* ...))]))
+    [(~describe
+      "(run <number> (<id> ...+) <goal> ...+)"
+      (_ n:number b:bindings+/c g+:goal/c ...+))
+     #'(run-core n (b.x ...) (conj g+ ...))]))
 
 (define-syntax-rule
   (define-goal-macro m f)
@@ -389,26 +423,40 @@
 
 (define-goal-macro conj
   (syntax-parser
-    [(conj g) #'g]
-    [(conj g1 g2 g* ...) #'(conj (conj2 g1 g2) g* ...)]))
+    [(~describe
+      "(conj <goal> ...+)"
+      (_ g:goal/c ...+))
+     (syntax-parse #'(g ...)
+       [(g) #'g]
+       [(g1 g2 g* ...)
+        #'(conj (conj2 g1 g2) g* ...)])]))
 
 (define-goal-macro fresh
   (syntax-parser
-    [(fresh () g1 g* ...)
-     #'(conj g1 g* ...)]
-    [(fresh (x:id ...)
-       g1 g* ...)
-     #'(fresh1 (x ...)
-               (conj g1 g* ...))]))
+    [(~describe
+      "(fresh (<id> ...) <goal> ...+)"
+      (_ b:bindings/c g*:goal/c ...+))
+     (syntax-parse #'b
+       [() #'(conj g* ...)]
+       [(x ...) #'(fresh1 (x ...)
+                          (conj g* ...))])]))
 
+(begin-for-syntax
+  (define-syntax-class conde-clause/c
+    #:description "clause [<goal> ...+]"
+    (pattern (g+:goal/c ...+))))
 (define-goal-macro conde
   (syntax-parser
-    [(conde [g1 g1* ...])
-     #'(conj g1 g1* ...)]
-    [(conde [g1 g1* ...] [g g* ...] ...)
-     #'(disj2
-        (conj g1 g1* ...)
-        (conde [g g* ...] ...))]))
+    [(~describe
+      "(conde [<goal> ...+] ...+)"
+      (_ c1:conde-clause/c c*:conde-clause/c ...))
+     (syntax-parse #'(c* ...)
+       [()
+        #'(conj c1.g+ ...)]
+       [_
+        #'(disj2
+           (conj c1.g+ ...)
+           (conde c* ...))])]))
 
 (define-term-macro unquote
   (lambda (stx)

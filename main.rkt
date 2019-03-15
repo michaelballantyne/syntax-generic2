@@ -85,8 +85,8 @@
 
 (define-syntax-rule (with-disappeared-uses-and-bindings body-expr ... stx-expr)
   (with-disappeared-uses
-      (with-disappeared-bindings
-          body-expr ... stx-expr)))
+   (with-disappeared-bindings
+    body-expr ... stx-expr)))
 
 #|
 ; Higher-level APIs for scope and binding. Not sure where these should
@@ -391,20 +391,12 @@
 
 (define-syntax generics/parse
   (syntax-parser
-    [(_ (name:id pat ...)
+    [(_ pat
         [(method:id args:id ...)
          body body* ...] ...)
-     ; This trick with the syntax class means that all the pattern
-     ; bindings get their hygiene from `name`, rather than their
-     ; original syntax.
-     #:with empty (datum->syntax #'name '||)
-     #'(let ()
-         (define-syntax-class cls
-           #:description (format "~a" '(name pat ...))
-           (pattern (name pat ...)))
-         (generics
-          [method (lambda (stx args ...)
-                    (syntax-parse stx
-                      [(~var empty cls)
-                       body body* ...]))]
-          ...))]))
+     #'(generics
+        [method (lambda (stx args ...)
+                  (syntax-parse stx
+                    [pat
+                     body body* ...]))]
+        ...)]))
