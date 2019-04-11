@@ -22,6 +22,7 @@
          absento symbolo numbero =/=
          fresh conde #%rel-app
          quasiquote unquote
+         rkt-term
          matche)
 
 ; term and goal nonterminals. To start we'll just have core forms.
@@ -42,8 +43,13 @@
   (define the-logic-var-binding
     (generics
      ; Currently unreachable as there are no Racket subexpressions of mk goals
-     [expand (λ (stx) (raise-syntax-error
-                       #f "logic variables may only be used in miniKanren terms" stx))]
+     [expand (λ (stx)
+               (raise-syntax-error
+                #f
+                (string-append
+                 "logic variables may only be used in miniKanren terms"
+                 ", and not across foreign language boundaries")
+                stx))]
      [logic-var-binding (lambda (stx) stx)]))
   
   (define (bind-logic-var! ctx name)
@@ -85,13 +91,11 @@
                           (expand-goal (qstx/rc (#%rel-app head . rest)) sc))]
       [_ (raise-syntax-error
           #f
-          "bad goal syntax;\n   expected a relation application or other goal form\n"
+          "not a goal constructor or relation name;\n   expected a relation application or other goal form\n"
           stx)]))
 
   (define (dispatch-compile stx)
     (apply-as-transformer compile 'expression #f stx))
-
-  #;(define relation-impl (make-free-id-table))
 
   (define (build-conj2 l)
     (when (null? l) (error 'build-conj2 "requires at least one item"))
@@ -152,6 +156,7 @@
     (pattern (x:id ...+))))
 
 ; run and define-relations are the interface with Racket
+; TODO: run*
 
 (define-syntax run-core
   (syntax-parser
@@ -403,6 +408,13 @@
    #'(mk:fresh (x ...) g^)]
   [(map-transform f)
    (f (qstx/rc (fresh1 (x ...) #,(map-transform #'g f))))])
+
+(define-syntax/generics (rkt-term e)
+  [(core-term)
+   this-syntax]
+  [(compile)
+   (syntax/loc #'e (invariant-assertion mk-value? e))]
+  [(map-transform f) (f this-syntax)])
 
 ; Syntactic sugar
 
