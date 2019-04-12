@@ -218,6 +218,7 @@
 
 (define (mk-value? v)
   (or (symbol? v)
+      (string? v)
       (number? v)
       (null? v)
       (and (pair? v)
