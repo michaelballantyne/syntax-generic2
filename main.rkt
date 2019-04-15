@@ -16,24 +16,17 @@
  
  with-disappeared-uses-and-bindings
  record-disappeared-bindings
+
  
- unbound
- #;racket-variable
-
- #;scope?
- #;make-expression-scope
- #;make-definition-scope
- #;in-scope
- #;defctx->scope
- #;scope-defctxs
- #;scope-bind!
- #;scope-lookup
-
  bind!
  make-def-ctx
  make-scope
+ scope?
+ scope-introducer
  add-scope
  add-scopes
+ unbound
+ lookup
  
  apply-as-transformer
  
@@ -88,152 +81,92 @@
    (with-disappeared-bindings
     body-expr ... stx-expr)))
 
-#|
-; Higher-level APIs for scope and binding. Not sure where these should
-; live, ultimately.
 
-(struct scope [defctxs introducers definition-scope?])
+; Light wrappers around the scope and definition context APIs for convenience
+; and automatic disappeared tracking. It would be really nice to make something
+; like these part of the standard library...
 
-(define (make-expression-scope [parent #f])
-  (make-scope 'make-expression-scope #f parent))
-(define (make-definition-scope [parent #f])
-  (make-scope 'make-definition-scope #t parent))
+(struct scope [introducer])
 
-(define (make-scope fn-name definition-scope? parent)
-  (unless (or (eq? #f parent) (scope? parent))
+(define (make-scope) (scope (make-syntax-introducer #t)))
+
+(define (add-scope stx sc)
+  (unless (syntax? stx)
     (raise-argument-error
-     fn-name
-     "(or/c scope? #f)"
-     parent))
-  (scope (cons (syntax-local-make-definition-context) (if parent (scope-defctxs parent) '()))
-         (cons (make-syntax-introducer #t)
-               (if parent
-                   (scope-introducers parent)
-                   '()))
-         definition-scope?))
-
-(define (in-scope sc stx)
-  (if sc
-      (let ()
-        (define stx1
-          (for/fold ([stx stx]) ([ctx (scope-defctxs sc)])
-            (internal-definition-context-introduce ctx stx 'add)
-            ))
-        (for/fold ([stx stx1]) ([introducer (scope-introducers sc)])
-          (introducer stx 'add)))
-      stx))
-
-(define unbound
-  (let ()
-    (struct unbound [])
-    (unbound)))
-
-(define racket-variable
-  (let ()
-    (struct racket-variable [])
-    (racket-variable)))
-
-; Note / TODO: this will consider both out-of-context references and
-; identifiers bound to Racket runtime variables as unbound, just
-; like syntax-local-value. To do better requires a new expander API,
-; as proposed in https://github.com/racket/racket/pull/2300
-; A good implementation of that API would implement racket-variable above.
-; TODO: should this use a failure-thunk instead of the unbound value?
-(define (scope-lookup sc id)
-  (unless (or (eq? #f sc) (scope? sc))
-    (raise-argument-error
-     'scope-lookup
-     "(or/c scope? #f)"
-     sc))
-  (unless (identifier? id)
-    (raise-argument-error
-     'scope-lookup
-     "identifier?"
-     id))
-  
-  (define id-in-sc (in-scope sc id))
-  
-  (define result
-    (syntax-local-value
-     id-in-sc
-     (lambda () unbound)
-     (and sc (scope-defctxs sc))))
-
-  (unless (eq? result unbound)
-    (record-disappeared-uses id-in-sc))
-  
-  result)
-
-(define (scope-bind! sc id rhs)
+     'add-scope
+     "syntax?"
+     stx))
   (unless (scope? sc)
     (raise-argument-error
-     'scope-bind!
+     'add-scope
      "scope?"
      sc))
-  (unless (identifier? id)
-    (raise-argument-error
-     'scope-bind!
-     "identifier?"
-     id))
-  
-  (define id-in-sc (syntax-local-identifier-as-binding (in-scope sc id)))
-  
-  (syntax-local-bind-syntaxes
-   (list id-in-sc)
-   (cond
-     [(syntax? rhs) rhs]
-     [(eq? racket-variable rhs) #f]
-     [else (datum->syntax (quote-syntax here) (list 'quote rhs))])
-   (car (scope-defctxs sc))
-   (scope-defctxs sc))
-  
-  (record-disappeared-bindings id-in-sc)
-  
-  id-in-sc)
+  ((scope-introducer sc) stx 'add))
 
-(define (defctx->scope defctx definition-scope?)
-  (unless (internal-definition-context? defctx)
+(define (add-scopes stx scs)
+  (unless (syntax? stx)
     (raise-argument-error
-     'defctx->scope
-     "internal-definition-context?"
-     defctx))
-  (unless (boolean? definition-scope?)
+     'add-scopes
+     "syntax?"
+     stx))
+  (unless (and (list? scs) (andmap scope? scs))
     (raise-argument-error
-     'defctx->scope
-     "boolean?"
-     definition-scope?))
-  (scope defctx '() definition-scope?))
+     'add-scopes
+     "(listof scope?)"
+     scs))
+  
+  (for/fold ([stx stx])
+            ([sc scs])
+    ((scope-introducer sc) stx 'add)))
 
-|#
 
-; Apply as transformer. Perhaps should eventually be added to
-; syntax/apply-transformer?
+(define (make-def-ctx) (syntax-local-make-definition-context))
 
 (define (add-ctx-scope ctx stx)
   (if ctx
       (internal-definition-context-introduce ctx stx 'add)
       stx))
 
-(define (make-scope) (make-syntax-introducer #t))
-(define (make-def-ctx) (syntax-local-make-definition-context))
-(define (bind! ctx id stx)
-  (syntax-local-bind-syntaxes (list id) stx ctx)
+(define (bind! ctx id rhs)
+  (unless (internal-definition-context? ctx)
+    (raise-argument-error
+     'bind!
+     "internal-definition-context?"
+     ctx))
+  (unless (identifier? id)
+    (raise-argument-error
+     'bind!
+     "identifier?"
+     id))
+  (unless (or (not rhs) (syntax? rhs))
+    (raise-argument-error
+     'bind!
+     "(or/c #f syntax?)"
+     rhs))
+  
+  (syntax-local-bind-syntaxes (list id) rhs ctx)
   (define id-in-sc (add-ctx-scope ctx (syntax-local-identifier-as-binding id)))
   (record-disappeared-bindings id-in-sc)
   id-in-sc)
-(define (add-scope stx sc)
-  (sc stx 'add))
-(define (add-scopes stx scs)
-  (for/fold ([stx stx])
-            ([sc scs])
-    (sc stx 'add)))
 
+; used only for eq? equality.
 (define unbound
   (let ()
     (struct unbound [])
     (unbound)))
 
-(define (scope-lookup ctx id)
+(define (lookup ctx id)
+  (unless (or (not ctx) (internal-definition-context? ctx))
+    (raise-argument-error
+     'lookup
+     "(or/c #f internal-definition-context?)"
+     ctx))
+  (unless (identifier? id)
+    (raise-argument-error
+     'lookup
+     "identifier?"
+     id))
+  
   (define id-in-sc (add-ctx-scope ctx id))
   (define result
     (syntax-local-value
@@ -245,6 +178,9 @@
     (record-disappeared-uses id-in-sc))
   
   result)
+
+; Apply as transformer. Perhaps should eventually be added to
+; syntax/apply-transformer?
 
 (struct wrapper (contents))
 
@@ -315,7 +251,7 @@
   (define (get-procedure stx-arg sc)
     (define head (dispatch-on stx-arg))
     (and head
-         (let ([v (scope-lookup sc head)])
+         (let ([v (lookup sc head)])
            (and (prop-pred v)
                 ((prop-ref v) v)))))
 
@@ -351,15 +287,15 @@
 (define-syntax define-syntax-generic
   (syntax-parser
     [(_ gen-name:id
-        (~optional fallback-proc:expr
-                   #:defaults ([fallback-proc #'(expand-to-error 'gen-name)]))
         (~optional (~seq #:dispatch-on dispatch-on-e:expr)
                    #:defaults ([dispatch-on-e #'dispatch-on-head])))
      (with-syntax ([gen-name? (format-id #'gen-name "~a?" #'gen-name)])
        #'(begin
            (define-values (prop func gen-name?)
-             (make-generic 'gen-name 'gen-name? dispatch-on-e fallback-proc))
-           (define-syntax gen-name (syntax-generic-info (quote-syntax prop) (quote-syntax func)))))]))
+             (make-generic 'gen-name 'gen-name? dispatch-on-e
+                           (expand-to-error 'gen-name)))
+           (define-syntax gen-name
+             (syntax-generic-info (quote-syntax prop) (quote-syntax func)))))]))
 
 (define (not-an-expression stx)
   (raise-syntax-error #f "not an expression" stx))
@@ -386,8 +322,9 @@
              (error))))
      (with-syntax ([(gen-prop ...) (map get-prop (syntax->list #'(gen ...)))])
        ; Use this instead of the struct macro for faster expansion.
-       #'(make-generics-impl (list (cons prop:procedure (lambda (s stx) (expander stx)))
-                                   (cons gen-prop (lambda (st) func)) ...)))]))
+       #'(make-generics-impl
+          (list (cons prop:procedure (lambda (s stx) (expander stx)))
+                (cons gen-prop (lambda (st) func)) ...)))]))
 
 (define-syntax generics/parse
   (syntax-parser
